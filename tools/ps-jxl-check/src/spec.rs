@@ -65,6 +65,21 @@ fn single_limit(value: &Value) -> CheckResult<Limit> {
 }
 
 pub fn limits(metadata: &Value, channels: usize) -> CheckResult<Vec<Limit>> {
+    // libjxl conformance: per-frame {rms_error, peak_error} for every channel; take the strictest frame.
+    if let Some(Value::Array(frames)) = field(metadata, &["frames"])? {
+        let mut limit: Option<Limit> = None;
+        for frame in frames {
+            let peak = tolerance(required(frame, &["peak_error", "max_error"])?)?;
+            let rmse = tolerance(required(frame, &["rms_error", "rmse"])?)?;
+            limit = Some(match limit {
+                Some(current) => Limit { peak: current.peak.min(peak), rmse: current.rmse.min(rmse) },
+                None => Limit { peak, rmse },
+            });
+        }
+        if let Some(limit) = limit {
+            return Ok(vec![limit; channels]);
+        }
+    }
     let value = field(metadata, &["thresholds", "tolerances", "error_thresholds"])?
         .unwrap_or(metadata);
     match value {

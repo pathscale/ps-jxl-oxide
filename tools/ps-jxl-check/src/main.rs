@@ -299,7 +299,17 @@ fn execute(args: &Arguments) -> CheckResult<bool> {
     let cases = case_directories(args)?;
     let mut passed = 0usize;
     let mut failed = 0usize;
+    let mut skipped = 0usize;
     for (name, directory) in cases {
+        // A testcase whose reference objects were not fetched is skipped, not failed.
+        if !std::fs::read_dir(&directory)
+            .map(|entries| entries.flatten().any(|entry| entry.path().extension().is_some_and(|e| e == "npy")))
+            .unwrap_or(false)
+        {
+            skipped += 1;
+            println!("SKIP {name} (no reference_image.npy)");
+            continue;
+        }
         let mut report = Report::default();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_case(&directory, &mut report)
@@ -314,7 +324,7 @@ fn execute(args: &Arguments) -> CheckResult<bool> {
             }
         }
     }
-    println!("conformance: {passed} passed, {failed} failed");
+    println!("conformance: {passed} passed, {failed} failed, {skipped} skipped");
     Ok(failed == 0)
 }
 
