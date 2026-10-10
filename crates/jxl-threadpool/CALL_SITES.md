@@ -10,9 +10,9 @@ The study's 21 dispatch statements include four jxl-jbr sites already deleted in
 | Pending | crates/jxl-modular/src/transform.rs:474 | Horizontal squeeze: immutable transform metadata and owned full-width sixteen-row stripe, including averages and residuals. |
 | Pending | crates/jxl-modular/src/transform.rs:486 | Vertical squeeze: immutable transform metadata and owned full-height column band; preserve recurrence and account for repacking. |
 | Pending | crates/jxl-modular/src/transform/rct.rs:126 | Immutable kernel/permutation and owned matching three-channel stripe. |
-| Pending | crates/jxl-render/src/features/noise.rs:165 | Arc source noise groups and owned convolved channel/group tile with private padded row scratch. |
-| Pending | crates/jxl-render/src/filter/epf.rs:178 | Arc iteration input, immutable LF sigma metadata and owned three-channel stripe with private sigma scratch. |
-| Pending | crates/jxl-render/src/filter/gabor.rs:90 | Arc input image and immutable weights; return owned output stripe including edge handling. |
+| Converted | crates/jxl-render/src/features/noise.rs:165 | Arc source noise groups and owned convolved channel/group tile with private padded row scratch. |
+| Converted | crates/jxl-render/src/filter/epf.rs:178 | Arc iteration input, immutable LF sigma metadata and owned three-channel stripe with private sigma scratch. |
+| Converted | crates/jxl-render/src/filter/gabor.rs:90 | Arc input image and immutable weights; return owned output stripe including edge handling. |
 | Removed | crates/jxl-render/src/lib.rs:499 | LF reference recursion is awaited by the exclusive coordinator; publish one Arc completed image. |
 | Removed | crates/jxl-render/src/lib.rs:506 | Reference-slot recursion is awaited in frame-index order; duplicate slots share one Arc image. |
 | Removed | crates/jxl-render/src/lib.rs:598 | Loading narrow path uses the same awaited reference coordinator, without detached work. |
