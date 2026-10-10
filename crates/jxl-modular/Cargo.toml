@@ -2,14 +2,14 @@
 name = "ps-jxl-modular"
 description = "JPEG XL Modular image decoder, part of jxl-oxide: pathscale fork of jxl-oxide."
 authors = ["Wonwoo Choi <chwo9843@gmail.com>", "PathScale"]
-repository = "https://github.com/pathscale/ps-jxl-oxide"
+repository.workspace = true
 readme = "README.md"
 keywords = ["jpeg-xl", "decoder", "jxl-oxide"]
 categories = ["multimedia::images", "no-std"]
-license = "MIT OR Apache-2.0"
+license.workspace = true
 
-version = "0.13.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [lib]
 name = "jxl_modular"

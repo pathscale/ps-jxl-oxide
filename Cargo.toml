@@ -2,6 +2,13 @@
 members = ["crates/*", "tools/*"]
 resolver = "2"
 
+# House scheme: one version for every ps-jxl-* crate, bumped here; a bump on master is the release.
+[workspace.package]
+version = "0.13.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/pathscale/ps-jxl-oxide"
+
 [workspace.dependencies.brotli-decompressor]
 version = "5.0.0"
 
