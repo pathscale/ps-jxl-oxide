@@ -3,7 +3,7 @@
 use jxl_bitstream::{Bitstream, U};
 use jxl_grid::{AlignedGrid, AllocTracker, MutableSubgrid};
 use jxl_oxide_common::{Bundle, define_bundle};
-use jxl_threadpool::JxlThreadPool;
+use jxl_threadpool::Tasks;
 
 use super::{
     ModularChannelInfo,
@@ -11,6 +11,7 @@ use super::{
 };
 use crate::{Error, Result, Sample, image::TransformedGrid};
 
+mod owned;
 mod palette;
 mod rct;
 mod squeeze;
@@ -76,13 +77,41 @@ impl TransformInfo {
         &self,
         grids: &mut Vec<TransformedGrid<'_, S>>,
         bit_depth: u32,
-        pool: &JxlThreadPool,
     ) {
         match self {
-            Self::Rct(rct) => rct.inverse(grids, pool),
+            Self::Rct(rct) => rct.inverse(grids),
             Self::Palette(pal) => pal.inverse(grids, bit_depth),
-            Self::Squeeze(sq) => sq.inverse(grids, pool),
+            Self::Squeeze(sq) => sq.inverse(grids),
         }
+    }
+
+    pub(super) async fn inverse_with_tasks<S: Sample>(
+        &self,
+        grids: &mut Vec<TransformedGrid<'_, S>>,
+        bit_depth: u32,
+        tasks: &Tasks,
+        tracker: Option<&AllocTracker>,
+    ) -> Result<()> {
+        match self {
+            Self::Rct(rct) => {
+                let begin = rct.begin_c as usize;
+                let mut views: Vec<_> = grids[begin..begin + 3]
+                    .iter_mut()
+                    .map(|grid| grid.grid_mut().borrow_mut())
+                    .collect();
+                let mut kernel = rct.clone();
+                kernel.begin_c = 0;
+                owned::run_stripes(&mut views, true, tasks, tracker, move |views| {
+                    let mut grids: Vec<_> = views.iter_mut()
+                        .map(|grid| TransformedGrid::from(grid.borrow_mut()))
+                        .collect();
+                    kernel.inverse(&mut grids);
+                }).await?;
+            }
+            Self::Palette(pal) => pal.inverse(grids, bit_depth),
+            Self::Squeeze(sq) => sq.inverse_with_tasks(grids, tasks, tracker).await?,
+        }
+        Ok(())
     }
 
     pub fn is_palette(&self) -> bool {
@@ -185,7 +214,7 @@ impl Rct {
         Ok(())
     }
 
-    fn inverse<S: Sample>(&self, grids: &mut [TransformedGrid<'_, S>], pool: &JxlThreadPool) {
+    fn inverse<S: Sample>(&self, grids: &mut [TransformedGrid<'_, S>]) {
         let permutation = self.rct_type / 7;
         let ty = self.rct_type % 7;
 
@@ -197,13 +226,13 @@ impl Rct {
         let grids = [a, b, c];
 
         match ty {
-            0 => rct::inverse_rct::<_, 0>(permutation, grids, pool),
-            1 => rct::inverse_rct::<_, 1>(permutation, grids, pool),
-            2 => rct::inverse_rct::<_, 2>(permutation, grids, pool),
-            3 => rct::inverse_rct::<_, 3>(permutation, grids, pool),
-            4 => rct::inverse_rct::<_, 4>(permutation, grids, pool),
-            5 => rct::inverse_rct::<_, 5>(permutation, grids, pool),
-            6 => rct::inverse_rct::<_, 6>(permutation, grids, pool),
+            0 => rct::inverse_rct::<_, 0>(permutation, grids),
+            1 => rct::inverse_rct::<_, 1>(permutation, grids),
+            2 => rct::inverse_rct::<_, 2>(permutation, grids),
+            3 => rct::inverse_rct::<_, 3>(permutation, grids),
+            4 => rct::inverse_rct::<_, 4>(permutation, grids),
+            5 => rct::inverse_rct::<_, 5>(permutation, grids),
+            6 => rct::inverse_rct::<_, 6>(permutation, grids),
             _ => unreachable!(),
         }
     }
@@ -436,7 +465,7 @@ impl Squeeze {
         Ok(())
     }
 
-    fn inverse<S: Sample>(&self, grids: &mut Vec<TransformedGrid<'_, S>>, pool: &JxlThreadPool) {
+    fn inverse<S: Sample>(&self, grids: &mut Vec<TransformedGrid<'_, S>>) {
         for sp in self.sp.iter().rev() {
             let begin = sp.begin_c as usize;
             let channel_count = sp.num_c as usize;
@@ -448,47 +477,93 @@ impl Squeeze {
             };
 
             for (ch, residu) in grids[begin..end].iter_mut().zip(residual_channels) {
-                sp.inverse(ch, residu, pool);
+                sp.inverse(ch, residu);
             }
         }
+    }
+
+    async fn inverse_with_tasks<S: Sample>(
+        &self,
+        grids: &mut Vec<TransformedGrid<'_, S>>,
+        tasks: &Tasks,
+        tracker: Option<&AllocTracker>,
+    ) -> Result<()> {
+        for sp in self.sp.iter().rev() {
+            let begin = sp.begin_c as usize;
+            let channel_count = sp.num_c as usize;
+            let end = begin + channel_count;
+            let residual_channels: Vec<_> = if sp.in_place {
+                grids.drain(end..(end + channel_count)).collect()
+            } else {
+                grids.drain((grids.len() - channel_count)..).collect()
+            };
+
+            for (ch, residual) in grids[begin..end].iter_mut().zip(residual_channels) {
+                let grid = ch.grid_mut();
+                sp.merge(grid, residual);
+                let horizontal = sp.horizontal;
+                owned::run_stripes(
+                    std::slice::from_mut(grid),
+                    horizontal,
+                    tasks,
+                    tracker,
+                    move |views| {
+                        SqueezeParams::run_kernel(&mut views[0], horizontal);
+                    },
+                ).await?;
+            }
+        }
+        Ok(())
     }
 }
 
 impl SqueezeParams {
-    fn inverse<'dest, S: Sample>(
+    fn merge<'dest, S: Sample>(
         &self,
-        i0: &mut TransformedGrid<'dest, S>,
+        i0: &mut MutableSubgrid<'dest, S>,
         i1: TransformedGrid<'dest, S>,
-        pool: &jxl_threadpool::JxlThreadPool,
     ) {
-        let i0 = i0.grid_mut();
         let TransformedGrid::Single(i1) = i1 else {
             panic!("residual channel should be Single channel")
         };
         if self.horizontal {
             i0.merge_horizontal_in_place(i1);
-            let width = i0.width();
-            let height = i0.height();
-            if height > 16 {
-                let remaining = i0.split_vertical(0).1;
-                pool.for_each_vec(remaining.into_groups(width, 16), |mut group| {
-                    squeeze::inverse_h(&mut group)
-                });
-            } else {
-                squeeze::inverse_h(i0);
-            }
         } else {
             i0.merge_vertical_in_place(i1);
-            let width = i0.width();
-            let height = i0.height();
-            if width > 16 {
-                let remaining = i0.split_horizontal(0).1;
-                pool.for_each_vec(remaining.into_groups(16, height), |mut group| {
-                    squeeze::inverse_v(&mut group)
-                });
-            } else {
-                squeeze::inverse_v(i0);
-            }
         }
     }
+
+    fn run_kernel<S: Sample>(grid: &mut MutableSubgrid<'_, S>, horizontal: bool) {
+        let width = grid.width();
+        let height = grid.height();
+        if width == 0 || height == 0 {
+            return;
+        }
+        if horizontal {
+            if height > 16 {
+                for mut group in grid.borrow_mut().into_groups(width, 16) {
+                    squeeze::inverse_h(&mut group);
+                }
+            } else {
+                squeeze::inverse_h(grid);
+            }
+        } else if width > 16 {
+            for mut group in grid.borrow_mut().into_groups(16, height) {
+                squeeze::inverse_v(&mut group);
+            }
+        } else {
+            squeeze::inverse_v(grid);
+        }
+    }
+
+    fn inverse<'dest, S: Sample>(
+        &self,
+        i0: &mut TransformedGrid<'dest, S>,
+        i1: TransformedGrid<'dest, S>,
+    ) {
+        let grid = i0.grid_mut();
+        self.merge(grid, i1);
+        Self::run_kernel(grid, self.horizontal);
+    }
 }
+

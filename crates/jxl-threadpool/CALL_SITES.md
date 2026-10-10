@@ -7,9 +7,9 @@ The study's 21 dispatch statements include four jxl-jbr sites already deleted in
 | Status | Site | Planned owned job |
 |---|---|---|
 | Converted | crates/jxl-color/src/convert.rs:637 | Arc prepared transform, owned multi-channel 65536-sample chunk; return channels and channel count. |
-| Pending | crates/jxl-modular/src/transform.rs:474 | Horizontal squeeze: immutable transform metadata and owned full-width sixteen-row stripe, including averages and residuals. |
-| Pending | crates/jxl-modular/src/transform.rs:486 | Vertical squeeze: immutable transform metadata and owned full-height column band; preserve recurrence and account for repacking. |
-| Pending | crates/jxl-modular/src/transform/rct.rs:126 | Immutable kernel/permutation and owned matching three-channel stripe. |
+| Converted | crates/jxl-modular/src/transform.rs:474 | Horizontal squeeze: immutable transform metadata and owned full-width sixteen-row stripe, including averages and residuals. |
+| Converted | crates/jxl-modular/src/transform.rs:486 | Vertical squeeze: immutable transform metadata and owned full-height column band; preserve recurrence and account for repacking. |
+| Converted | crates/jxl-modular/src/transform/rct.rs:126 | Immutable kernel/permutation and owned matching three-channel stripe. |
 | Converted | crates/jxl-render/src/features/noise.rs:165 | Arc source noise groups and owned convolved channel/group tile with private padded row scratch. |
 | Converted | crates/jxl-render/src/filter/epf.rs:178 | Arc iteration input, immutable LF sigma metadata and owned three-channel stripe with private sigma scratch. |
 | Converted | crates/jxl-render/src/filter/gabor.rs:90 | Arc input image and immutable weights; return owned output stripe including edge handling. |
@@ -17,8 +17,8 @@ The study's 21 dispatch statements include four jxl-jbr sites already deleted in
 | Removed | crates/jxl-render/src/lib.rs:506 | Reference-slot recursion is awaited in frame-index order; duplicate slots share one Arc image. |
 | Removed | crates/jxl-render/src/lib.rs:598 | Loading narrow path uses the same awaited reference coordinator, without detached work. |
 | Removed | crates/jxl-render/src/lib.rs:603 | Loading wide path uses the same awaited reference coordinator, without detached work. |
-| Pending | crates/jxl-render/src/modular.rs:38 | LF nodes return LF metadata and Modular contributions; retain serial single-entry parsing order. |
-| Pending | crates/jxl-render/src/modular.rs:94 | Immutable MA/channel descriptions; return owned recursive Modular output per pass/group. |
+| Converted | crates/jxl-render/src/modular.rs:38 | LF nodes return LF metadata and Modular contributions; retain serial single-entry parsing order. |
+| Converted | crates/jxl-render/src/modular.rs:94 | Immutable MA/channel descriptions; return owned recursive Modular output per pass/group. |
 | Pending | crates/jxl-render/src/util.rs:230 | Return owned LF group, Modular contribution and optional dequantized LF tile. |
 | Pending | crates/jxl-render/src/vardct/mod.rs:156 | Arc LF/frame descriptions; return immutable HF-global snapshot after section indexing permits it. |
 | Pending | crates/jxl-render/src/vardct/mod.rs:284 | Arc LF/HF/MA metadata; pass the owned coefficient group through ordered passes and return its Modular contribution. |

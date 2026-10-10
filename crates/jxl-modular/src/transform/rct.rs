@@ -5,7 +5,6 @@ use std::arch::is_x86_feature_detected;
 use std::num::Wrapping;
 
 use jxl_grid::MutableSubgrid;
-use jxl_threadpool::JxlThreadPool;
 
 use crate::Sample;
 
@@ -15,7 +14,6 @@ type UnsafeFnRow<S> = unsafe fn(&mut [&mut [S]; 3]);
 pub fn inverse_rct<S: Sample, const TYPE: u32>(
     permutation: u32,
     mut grids: [&mut MutableSubgrid<S>; 3],
-    pool: &JxlThreadPool,
 ) {
     let grid16 = grids.each_mut().map(|g| S::try_as_mutable_subgrid_i16(g));
     if let [Some(a), Some(b), Some(c)] = grid16 {
@@ -28,7 +26,6 @@ pub fn inverse_rct<S: Sample, const TYPE: u32>(
                     permutation,
                     grids,
                     inverse_row_i16_x86_64_avx2::<TYPE>,
-                    pool,
                 );
                 return;
             }
@@ -41,13 +38,12 @@ pub fn inverse_rct<S: Sample, const TYPE: u32>(
                     permutation,
                     grids,
                     inverse_row_i16_aarch64_neon::<TYPE>,
-                    pool,
                 );
                 return;
             }
         }
 
-        run_rows(permutation, grids, inverse_row_i16_base::<TYPE>, pool);
+        run_rows(permutation, grids, inverse_row_i16_base::<TYPE>);
         return;
     }
 
@@ -62,7 +58,6 @@ pub fn inverse_rct<S: Sample, const TYPE: u32>(
                     permutation,
                     grids,
                     inverse_row_i32_x86_64_avx2::<TYPE>,
-                    pool,
                 );
                 return;
             }
@@ -75,13 +70,12 @@ pub fn inverse_rct<S: Sample, const TYPE: u32>(
                     permutation,
                     grids,
                     inverse_row_i32_aarch64_neon::<TYPE>,
-                    pool,
                 );
                 return;
             }
         }
 
-        run_rows(permutation, grids, inverse_row_i32_base::<TYPE>, pool);
+        run_rows(permutation, grids, inverse_row_i32_base::<TYPE>);
     }
 }
 
@@ -90,10 +84,9 @@ fn run_rows<S: Sample>(
     permutation: u32,
     grids: [&mut MutableSubgrid<S>; 3],
     f: FnRow<S>,
-    pool: &JxlThreadPool,
 ) {
     // SAFETY: `f` is safe.
-    unsafe { run_rows_unsafe(permutation, grids, f, pool) }
+    unsafe { run_rows_unsafe(permutation, grids, f) }
 }
 
 #[inline(never)]
@@ -101,12 +94,7 @@ unsafe fn run_rows_unsafe<S: Sample>(
     permutation: u32,
     grids: [&mut MutableSubgrid<S>; 3],
     f: UnsafeFnRow<S>,
-    pool: &JxlThreadPool,
 ) {
-    struct RctJob<'g, S: Sample> {
-        grids: [MutableSubgrid<'g, S>; 3],
-    }
-
     let width = grids[0].width();
     let height = grids[0].height();
     assert_eq!(width, grids[1].width());
@@ -117,23 +105,14 @@ unsafe fn run_rows_unsafe<S: Sample>(
         return;
     }
 
-    let [mut a, mut b, mut c] = grids.map(|g| g.borrow_mut().into_groups(width, 16));
-    let mut jobs = Vec::new();
-    while let (Some(a), Some(b), Some(c)) = (a.pop(), b.pop(), c.pop()) {
-        jobs.push(RctJob { grids: [a, b, c] });
-    }
-
-    pool.for_each_vec(jobs, |job| {
-        let mut grids = job.grids;
-        let height = grids[0].height();
-        for y in 0..height {
-            let mut rows = grids.each_mut().map(|g| g.get_row_mut(y));
-            unsafe {
-                f(&mut rows);
-            }
-            inverse_permute(permutation, rows);
+    let mut grids = grids;
+    for y in 0..height {
+        let mut rows = grids.each_mut().map(|g| g.get_row_mut(y));
+        unsafe {
+            f(&mut rows);
         }
-    });
+        inverse_permute(permutation, rows);
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -254,3 +233,4 @@ fn inverse_permute<S: Sample>(permutation: u32, rows: [&mut [S]; 3]) {
         _ => {}
     }
 }
+

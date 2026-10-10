@@ -14,6 +14,8 @@ pub enum Error {
     Bitstream(jxl_bitstream::Error),
     Decoder(jxl_coding::Error),
     Buffer(jxl_grid::OutOfMemory),
+    /// An owned task was cancelled or returned an invalid output.
+    TaskCancelled,
 }
 
 impl From<jxl_bitstream::Error> for Error {
@@ -49,6 +51,7 @@ impl std::fmt::Display for Error {
             Bitstream(err) => write!(f, "bitstream error: {err}"),
             Decoder(err) => write!(f, "entropy decoder error: {err}"),
             Buffer(err) => write!(f, "{err}"),
+            TaskCancelled => write!(f, "modular task cancelled or returned an invalid output"),
         }
     }
 }
@@ -77,3 +80,4 @@ impl Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+

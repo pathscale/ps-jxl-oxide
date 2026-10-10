@@ -444,11 +444,61 @@ impl<'dest, S: Sample> TransformedModularSubimage<'dest, S> {
         Ok(image)
     }
 
-    pub fn finish(mut self, pool: &jxl_threadpool::JxlThreadPool) -> bool {
+    /// Synchronous compatibility path for parser-owned kernels.
+    pub fn finish<P: ?Sized>(mut self, _pool: &P) -> bool {
         for tr in self.header.transform.iter().rev() {
-            tr.inverse(&mut self.grid, self.bit_depth, pool);
+            tr.inverse(&mut self.grid, self.bit_depth);
         }
         !self.partial
+    }
+
+    /// Awaits each inverse transform before exposing its output to the next one.
+    pub async fn finish_with_tasks(
+        mut self,
+        tasks: &jxl_threadpool::Tasks,
+        tracker: Option<&AllocTracker>,
+    ) -> Result<bool> {
+        for tr in self.header.transform.iter().rev() {
+            tr.inverse_with_tasks(&mut self.grid, self.bit_depth, tasks, tracker).await?;
+        }
+        Ok(!self.partial)
+    }
+
+    /// Copies a group leader into private storage for recursive decoding.
+    ///
+    /// Recursive images already reborrow only leaders; palette members remain in the parent.
+    pub fn to_owned(&self, tracker: Option<&AllocTracker>) -> Result<OwnedModularSubimage<S>> {
+        let mut grids = Vec::with_capacity(self.grid.len());
+        for grid in &self.grid {
+            let grid = grid.grid();
+            let mut owned = AlignedGrid::with_alloc_tracker(grid.width(), grid.height(), tracker)?;
+            for y in 0..grid.height() {
+                owned.get_row_mut(y).copy_from_slice(grid.get_row(y));
+            }
+            grids.push(owned);
+        }
+        Ok(OwnedModularSubimage {
+            channel_info: std::sync::Arc::new(self.channel_info.clone()),
+            bit_depth: self.bit_depth,
+            grids,
+            recursive: None,
+            partial: self.partial,
+            finish_pending: false,
+        })
+    }
+
+    /// Places a returned group into the parent layout without changing merged members.
+    pub fn copy_from_owned(&mut self, owned: OwnedModularSubimage<S>) {
+        assert_eq!(self.grid.len(), owned.grids.len());
+        for (grid, output) in self.grid.iter_mut().zip(owned.grids) {
+            let grid = grid.grid_mut();
+            assert_eq!(grid.width(), output.width());
+            assert_eq!(grid.height(), output.height());
+            for y in 0..grid.height() {
+                grid.get_row_mut(y).copy_from_slice(output.get_row(y));
+            }
+        }
+        self.partial = owned.partial;
     }
 }
 
@@ -654,6 +704,117 @@ impl<S: Sample> RecursiveModularImage<'_, S> {
             grid: grids,
             partial: true,
         })
+    }
+}
+
+/// Private group samples and immutable channel descriptions for a returning job.
+#[derive(Debug)]
+pub struct OwnedModularSubimage<S: Sample> {
+    channel_info: std::sync::Arc<Vec<ModularChannelInfo>>,
+    bit_depth: u32,
+    grids: Vec<AlignedGrid<S>>,
+    recursive: Option<OwnedRecursiveState<S>>,
+    partial: bool,
+    finish_pending: bool,
+}
+
+#[derive(Debug)]
+struct OwnedRecursiveState<S: Sample> {
+    header: ModularHeader,
+    ma_ctx: MaConfig,
+    channels: ModularChannels,
+    meta_channels: Vec<AlignedGrid<S>>,
+}
+
+impl<S: Sample> OwnedModularSubimage<S> {
+    pub fn is_empty(&self) -> bool {
+        self.channel_info.is_empty()
+    }
+
+    pub fn is_partial(&self) -> bool {
+        self.partial
+    }
+
+    /// Parses and entropy-decodes locally, retaining storage even on a partial-input error.
+    /// Inverse transforms are awaited later by the async coordinator.
+    pub fn decode_recursive(
+        &mut self,
+        bitstream: &mut Bitstream,
+        global_ma_config: Option<&MaConfig>,
+        stream_index: u32,
+        allow_partial: bool,
+        tracker: Option<&AllocTracker>,
+    ) -> Result<()> {
+        self.recursive = None;
+        self.finish_pending = false;
+        if self.is_empty() {
+            self.partial = false;
+            return Ok(());
+        }
+        let channels = ModularChannels {
+            info: self.channel_info.as_ref().clone(),
+            nb_meta_channels: 0,
+        };
+        let (header, ma_ctx) = crate::read_and_validate_local_modular_header(
+            bitstream,
+            &channels,
+            global_ma_config,
+            tracker,
+        )?;
+        let mut meta_channels = Vec::new();
+        for tr in &header.transform {
+            tr.prepare_meta_channels(&mut meta_channels, tracker)?;
+        }
+        let mut image = RecursiveModularImage {
+            header,
+            ma_ctx,
+            bit_depth: self.bit_depth,
+            channels,
+            meta_channels,
+            image_channels: self.grids.iter_mut()
+                .map(|grid| TransformedGrid::from(grid.as_subgrid_mut()))
+                .collect(),
+        };
+        let (result, partial) = {
+            let mut subimage = image.prepare_subimage()?;
+            let result = subimage.decode(bitstream, stream_index, allow_partial);
+            (result, subimage.is_partial())
+        };
+        let RecursiveModularImage {
+            header, ma_ctx, channels, meta_channels, image_channels, ..
+        } = image;
+        drop(image_channels);
+        self.recursive = Some(OwnedRecursiveState { header, ma_ctx, channels, meta_channels });
+        self.partial = partial;
+        self.finish_pending = result.is_ok();
+        result
+    }
+
+    pub async fn finish_with_tasks(
+        &mut self,
+        tasks: &jxl_threadpool::Tasks,
+        tracker: Option<&AllocTracker>,
+    ) -> Result<bool> {
+        if !self.finish_pending {
+            return Ok(!self.partial);
+        }
+        let OwnedRecursiveState { header, ma_ctx, channels, meta_channels } =
+            self.recursive.take().expect("decoded recursive image");
+        let mut image = RecursiveModularImage {
+            header,
+            ma_ctx,
+            bit_depth: self.bit_depth,
+            channels,
+            meta_channels,
+            image_channels: self.grids.iter_mut()
+                .map(|grid| TransformedGrid::from(grid.as_subgrid_mut()))
+                .collect(),
+        };
+        let mut subimage = image.prepare_subimage()?;
+        subimage.partial = self.partial;
+        let complete = subimage.finish_with_tasks(tasks, tracker).await?;
+        self.finish_pending = false;
+        Ok(complete)
     }
 }
 

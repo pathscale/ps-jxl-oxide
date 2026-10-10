@@ -1,149 +1,246 @@
-use jxl_frame::{FrameHeader, data::GlobalModular};
-use jxl_modular::{Sample, image::TransformedModularSubimage};
+use std::sync::Arc;
 
-use crate::{Error, ImageWithRegion, IndexedFrame, Region, RenderCache, Result, util};
+use jxl_bitstream::{Bitstream, Section};
+use jxl_frame::{
+    FrameHeader,
+    data::{GlobalModular, LfGlobal, LfGlobalParams, LfGroup, TocGroupKind},
+};
+use jxl_grid::AllocTracker;
+use jxl_modular::{
+    MaConfig, Sample,
+    image::{OwnedModularSubimage, TransformedModularSubimage},
+};
+use jxl_oxide_common::Bundle;
+use jxl_threadpool::Tasks;
 
-pub(crate) async fn render_modular<S: Sample>(
-    frame: &IndexedFrame,
-    cache: &mut RenderCache<S>,
-    region: Region,
-    pool: &jxl_threadpool::JxlThreadPool,
-    _tasks: &jxl_threadpool::Tasks,
-) -> Result<ImageWithRegion> {
-    render_modular_inline(frame, cache, region, pool)
+use crate::{Error, ImageWithRegion, IndexedFrame, Region, RenderCache, Result};
+
+const GROUP_BATCH: usize = 8;
+
+struct GroupWork<'dest, S: Sample> {
+    kind: TocGroupKind,
+    stream_index: u32,
+    modular: Option<TransformedModularSubimage<'dest, S>>,
 }
 
-fn render_modular_inline<S: Sample>(
+struct GroupInput {
+    section: Section,
+    offset: usize,
+    stream_index: u32,
+    allow_partial: bool,
+    ma_config: Option<Arc<MaConfig>>,
+    tracker: Option<AllocTracker>,
+}
+
+struct GroupOutput<S: Sample> {
+    modular: Option<OwnedModularSubimage<S>>,
+    result: jxl_frame::Result<()>,
+    offset: usize,
+}
+
+fn decode_group<S: Sample>(
+    input: Arc<GroupInput>,
+    mut modular: Option<OwnedModularSubimage<S>>,
+) -> GroupOutput<S> {
+    let mut bitstream = Bitstream::from_section(&input.section);
+    let result = bitstream.skip_bits(input.offset).map_err(jxl_frame::Error::from)
+        .and_then(|()| {
+            if let Some(modular) = &mut modular {
+                modular.decode_recursive(
+                    &mut bitstream,
+                    input.ma_config.as_deref(),
+                    input.stream_index,
+                    input.allow_partial,
+                    input.tracker.as_ref(),
+                ).map_err(jxl_frame::Error::from)?;
+            }
+            Ok(())
+        });
+    GroupOutput { modular, result, offset: bitstream.num_read_bits() }
+}
+
+fn group_section(frame: &IndexedFrame, kind: TocGroupKind) -> Option<(Section, bool)> {
+    let section = frame.data(kind)?.clone();
+    let size = frame.toc().iter_bitstream_order().find(|group| group.kind == kind)?.size;
+    let partial = section.len() < size as usize;
+    Some((section, partial))
+}
+
+/// The unused compatibility argument keeps existing render callers source-compatible.
+pub(crate) async fn render_modular<S: Sample, P: ?Sized>(
     frame: &IndexedFrame,
     cache: &mut RenderCache<S>,
     region: Region,
-    pool: &jxl_threadpool::JxlThreadPool,
+    _pool: &P,
+    tasks: &Tasks,
 ) -> Result<ImageWithRegion> {
     let image_header = frame.image_header();
     let frame_header = frame.header();
     let tracker = frame.alloc_tracker();
     let xyb_encoded = image_header.metadata.xyb_encoded;
+    let single = frame.toc().is_single_entry();
+    let mut single_offset = 0;
 
-    let lf_global = if let Some(x) = &cache.lf_global {
-        x
-    } else {
-        let lf_global = frame
-            .try_parse_lf_global()
-            .ok_or(Error::IncompleteFrame)??;
+    // Single-entry sections have no independent LF/pass boundaries. Own the cursor here.
+    let single_section = if single {
+        let (section, allow_partial) = group_section(frame, TocGroupKind::All)
+            .ok_or(Error::IncompleteFrame)?;
+        let mut bitstream = Bitstream::from_section(&section);
+        let parsed = LfGlobal::<S>::parse(
+            &mut bitstream,
+            LfGlobalParams::new(image_header, frame_header, tracker, allow_partial),
+        );
+        let lf_global = match parsed {
+            Err(error) if allow_partial && error.unexpected_eof() => {
+                return Err(Error::IncompleteFrame);
+            }
+            other => other?,
+        };
+        single_offset = bitstream.num_read_bits();
         cache.lf_global = Some(lf_global);
-        cache.lf_global.as_ref().unwrap()
+        Some((section, allow_partial))
+    } else {
+        if cache.lf_global.is_none() {
+            cache.lf_global = Some(frame.try_parse_lf_global()
+                .ok_or(Error::IncompleteFrame)??);
+        }
+        None
     };
+
+    let lf_global = cache.lf_global.as_ref().unwrap();
     let mut gmodular = lf_global.gmodular.try_clone()?;
     let modular_region = compute_modular_region(frame_header, &gmodular, region, false);
-
+    let global_ma_config = gmodular.ma_config().cloned().map(Arc::new);
     let modular_image = gmodular.modular.image_mut().unwrap();
     let groups = modular_image.prepare_groups(frame.pass_shifts())?;
-    let lf_group_image = groups.lf_groups;
-    let pass_group_image = groups.pass_groups;
 
-    tracing::trace_span!("Decode").in_scope(|| {
-        let result = std::sync::RwLock::new(Result::Ok(()));
-        pool.scope(|scope| {
-            let lf_groups = &mut cache.lf_groups;
-            scope.spawn(|_| {
-                let r = util::load_lf_groups(
-                    frame,
-                    lf_global,
-                    lf_groups,
-                    lf_group_image,
-                    modular_region.downsample(3),
-                    pool,
-                );
-                if let Err(e) = r {
-                    *result.write().unwrap() = Err(e);
-                }
-            });
-
-            struct PassGroupJob<'modular, S: Sample> {
-                pass_idx: u32,
-                group_idx: u32,
-                modular: TransformedModularSubimage<'modular, S>,
-            }
-
-            let group_dim = frame_header.group_dim();
-            let groups_per_row = frame_header.groups_per_row();
-            let jobs = pass_group_image
-                .into_iter()
-                .enumerate()
-                .flat_map(|(pass_idx, pass_image)| {
-                    let pass_idx = pass_idx as u32;
-                    pass_image
-                        .into_iter()
-                        .enumerate()
-                        .filter_map(move |(group_idx, modular)| {
-                            let group_idx = group_idx as u32;
-                            let group_x = group_idx % groups_per_row;
-                            let group_y = group_idx / groups_per_row;
-                            let left = group_x * group_dim;
-                            let top = group_y * group_dim;
-
-                            let group_region = Region {
-                                left: left as i32,
-                                top: top as i32,
-                                width: group_dim,
-                                height: group_dim,
-                            };
-                            if group_region.intersection(modular_region).is_empty() {
-                                return None;
-                            }
-
-                            Some(PassGroupJob {
-                                pass_idx,
-                                group_idx,
-                                modular,
-                            })
-                        })
-                })
-                .collect::<Vec<_>>();
-
-            pool.for_each_vec(
-                jobs,
-                |PassGroupJob {
-                     pass_idx,
-                     group_idx,
-                     modular,
-                 }| {
-                    let bitstream = match frame.pass_group_bitstream(pass_idx, group_idx) {
-                        Some(Ok(bitstream)) => bitstream,
-                        Some(Err(e)) => {
-                            *result.write().unwrap() = Err(e.into());
-                            return;
-                        }
-                        None => return,
-                    };
-
-                    let allow_partial = bitstream.partial;
-                    let mut bitstream = bitstream.bitstream;
-                    let global_ma_config = gmodular.ma_config.as_ref();
-                    let result = &result;
-                    let r = jxl_frame::data::decode_pass_group_modular(
-                        &mut bitstream,
-                        frame_header,
-                        global_ma_config,
-                        pass_idx,
-                        group_idx,
-                        modular,
-                        allow_partial,
-                        tracker,
-                        pool,
-                    );
-                    if !allow_partial && r.is_err() {
-                        *result.write().unwrap() = r.map_err(From::from);
-                    }
-                },
-            );
+    // Stable reduction order: LF raster order, then pass-major group raster order.
+    let group_dim = frame_header.group_dim();
+    let lf_region = modular_region.downsample(3);
+    let mut work = Vec::new();
+    let mut lf_images = groups.lf_groups.into_iter();
+    for group_idx in 0..frame_header.num_lf_groups() {
+        let modular = lf_images.next();
+        let groups_per_row = frame_header.lf_groups_per_row();
+        let group_region = Region {
+            left: ((group_idx % groups_per_row) * group_dim) as i32,
+            top: ((group_idx / groups_per_row) * group_dim) as i32,
+            width: group_dim,
+            height: group_dim,
+        };
+        if !single && group_region.intersection(lf_region).is_empty() {
+            continue;
+        }
+        work.push(GroupWork {
+            kind: TocGroupKind::LfGroup(group_idx),
+            stream_index: 1 + frame_header.num_lf_groups() + group_idx,
+            modular,
         });
-        result.into_inner().unwrap()
-    })?;
+    }
+    for (pass_idx, pass_image) in groups.pass_groups.into_iter().enumerate() {
+        let pass_idx = pass_idx as u32;
+        for (group_idx, modular) in pass_image.into_iter().enumerate() {
+            let group_idx = group_idx as u32;
+            let groups_per_row = frame_header.groups_per_row();
+            let group_region = Region {
+                left: ((group_idx % groups_per_row) * group_dim) as i32,
+                top: ((group_idx / groups_per_row) * group_dim) as i32,
+                width: group_dim,
+                height: group_dim,
+            };
+            if !single && group_region.intersection(modular_region).is_empty() {
+                continue;
+            }
+            work.push(GroupWork {
+                kind: TocGroupKind::GroupPass { pass_idx, group_idx },
+                stream_index: 1 + 3 * frame_header.num_lf_groups() + 17
+                    + pass_idx * frame_header.num_groups() + group_idx,
+                modular: Some(modular),
+            });
+        }
+    }
 
-    tracing::trace_span!("Inverse Modular transform").in_scope(|| {
-        modular_image.prepare_subimage().unwrap().finish(pool);
-    });
+    let mut work = work.into_iter();
+    let mut stop_single = false;
+    loop {
+        let mut batch = Vec::with_capacity(GROUP_BATCH);
+        let mut jobs: Vec<Box<dyn FnOnce() -> GroupOutput<S> + Send + 'static>> =
+            Vec::with_capacity(GROUP_BATCH);
+        let batch_size = if single { 1 } else { GROUP_BATCH };
+        for _ in 0..batch_size {
+            let Some(item) = work.next() else {
+                break;
+            };
+            if stop_single {
+                continue;
+            }
+            let source = if let Some((section, partial)) = &single_section {
+                Some((section.clone(), *partial, single_offset))
+            } else {
+                group_section(frame, item.kind).map(|(section, partial)| (section, partial, 0))
+            };
+            let Some((section, allow_partial, offset)) = source else {
+                continue;
+            };
+            let owned = item.modular.as_ref()
+                .map(|modular| modular.to_owned(tracker))
+                .transpose()?;
+            let input = Arc::new(GroupInput {
+                section,
+                offset,
+                stream_index: item.stream_index,
+                allow_partial,
+                ma_config: global_ma_config.clone(),
+                tracker: tracker.cloned(),
+            });
+            jobs.push(Box::new(move || decode_group(input, owned)));
+            batch.push((item, allow_partial));
+        }
+        if jobs.is_empty() {
+            if work.len() == 0 {
+                break;
+            }
+            continue;
+        }
+
+        let outputs = tasks.run_all(jobs).await
+            .map_err(|_| Error::Modular(jxl_modular::Error::TaskCancelled))?;
+        for ((mut item, allow_partial), mut output) in batch.into_iter().zip(outputs) {
+            let is_lf = matches!(item.kind, TocGroupKind::LfGroup(_));
+            let decoded = output.result.is_ok();
+            if let Err(error) = output.result {
+                let suppress = allow_partial
+                    && (!is_lf || !single || error.unexpected_eof());
+                if !suppress {
+                    return Err(error.into());
+                }
+                if single && is_lf {
+                    stop_single = true;
+                }
+            }
+            if single {
+                single_offset = output.offset;
+            }
+            let mut complete = true;
+            if decoded {
+                if let Some(modular) = &mut output.modular {
+                    complete = modular.finish_with_tasks(tasks, tracker).await?;
+                }
+                if let TocGroupKind::LfGroup(idx) = item.kind {
+                    cache.lf_groups.insert(idx, LfGroup {
+                        lf_coeff: None,
+                        hf_meta: None,
+                        partial: !complete,
+                    });
+                }
+            }
+            if let (Some(target), Some(owned)) = (&mut item.modular, output.modular) {
+                target.copy_from_owned(owned);
+            }
+        }
+    }
+
+    modular_image.prepare_subimage()?.finish_with_tasks(tasks, tracker).await?;
 
     let mut fb = ImageWithRegion::new(frame_header.encoded_color_channels(), tracker);
     fb.extend_from_gmodular(gmodular);
