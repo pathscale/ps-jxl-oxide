@@ -44,7 +44,9 @@ pub(crate) async fn render_frame<S: Sample>(
         .intersection(full_frame_region);
 
     let mut fb = match frame_header.encoding {
-        Encoding::Modular => modular::render_modular(frame, cache, color_padded_region, &pool, tasks).await?,
+        Encoding::Modular => {
+            modular::render_modular(frame, cache, color_padded_region, &pool, tasks).await?
+        }
         Encoding::VarDct => {
             let result = vardct::render_vardct(
                 frame,
@@ -53,7 +55,8 @@ pub(crate) async fn render_frame<S: Sample>(
                 color_padded_region,
                 &pool,
                 tasks,
-            ).await;
+            )
+            .await;
             match (result, reference_frames.lf) {
                 (Ok(grid), _) => grid,
                 (Err(e), Some(lf)) if matches!(e, Error::IncompleteFrame) || e.unexpected_eof() => {
@@ -94,14 +97,9 @@ pub(crate) async fn render_frame<S: Sample>(
         }
 
         if let EdgePreservingFilter::Enabled(epf_params) = &frame_header.restoration_filter.epf {
-            filtered = filter::apply_epf(
-                filtered,
-                &cache.lf_groups,
-                frame_header,
-                epf_params,
-                tasks,
-            )
-            .await?;
+            filtered =
+                filter::apply_epf(filtered, &cache.lf_groups, frame_header, epf_params, tasks)
+                    .await?;
         }
 
         filtered.write_to(&mut fb)?;
@@ -197,4 +195,3 @@ async fn render_features<S: Sample>(
 
     Ok(())
 }
-

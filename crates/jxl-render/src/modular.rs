@@ -43,25 +43,37 @@ fn decode_group<S: Sample>(
     mut modular: Option<OwnedModularSubimage<S>>,
 ) -> GroupOutput<S> {
     let mut bitstream = Bitstream::from_section(&input.section);
-    let result = bitstream.skip_bits(input.offset).map_err(jxl_frame::Error::from)
+    let result = bitstream
+        .skip_bits(input.offset)
+        .map_err(jxl_frame::Error::from)
         .and_then(|()| {
             if let Some(modular) = &mut modular {
-                modular.decode_recursive(
-                    &mut bitstream,
-                    input.ma_config.as_deref(),
-                    input.stream_index,
-                    input.allow_partial,
-                    input.tracker.as_ref(),
-                ).map_err(jxl_frame::Error::from)?;
+                modular
+                    .decode_recursive(
+                        &mut bitstream,
+                        input.ma_config.as_deref(),
+                        input.stream_index,
+                        input.allow_partial,
+                        input.tracker.as_ref(),
+                    )
+                    .map_err(jxl_frame::Error::from)?;
             }
             Ok(())
         });
-    GroupOutput { modular, result, offset: bitstream.num_read_bits() }
+    GroupOutput {
+        modular,
+        result,
+        offset: bitstream.num_read_bits(),
+    }
 }
 
 fn group_section(frame: &IndexedFrame, kind: TocGroupKind) -> Option<(Section, bool)> {
     let section = frame.data(kind)?.clone();
-    let size = frame.toc().iter_bitstream_order().find(|group| group.kind == kind)?.size;
+    let size = frame
+        .toc()
+        .iter_bitstream_order()
+        .find(|group| group.kind == kind)?
+        .size;
     let partial = section.len() < size as usize;
     Some((section, partial))
 }
@@ -83,8 +95,8 @@ pub(crate) async fn render_modular<S: Sample, P: ?Sized>(
 
     // Single-entry sections have no independent LF/pass boundaries. Own the cursor here.
     let single_section = if single {
-        let (section, allow_partial) = group_section(frame, TocGroupKind::All)
-            .ok_or(Error::IncompleteFrame)?;
+        let (section, allow_partial) =
+            group_section(frame, TocGroupKind::All).ok_or(Error::IncompleteFrame)?;
         let mut bitstream = Bitstream::from_section(&section);
         let parsed = LfGlobal::<S>::parse(
             &mut bitstream,
@@ -101,8 +113,11 @@ pub(crate) async fn render_modular<S: Sample, P: ?Sized>(
         Some((section, allow_partial))
     } else {
         if cache.lf_global.is_none() {
-            cache.lf_global = Some(frame.try_parse_lf_global()
-                .ok_or(Error::IncompleteFrame)??);
+            cache.lf_global = Some(
+                frame
+                    .try_parse_lf_global()
+                    .ok_or(Error::IncompleteFrame)??,
+            );
         }
         None
     };
@@ -152,9 +167,15 @@ pub(crate) async fn render_modular<S: Sample, P: ?Sized>(
                 continue;
             }
             work.push(GroupWork {
-                kind: TocGroupKind::GroupPass { pass_idx, group_idx },
-                stream_index: 1 + 3 * frame_header.num_lf_groups() + 17
-                    + pass_idx * frame_header.num_groups() + group_idx,
+                kind: TocGroupKind::GroupPass {
+                    pass_idx,
+                    group_idx,
+                },
+                stream_index: 1
+                    + 3 * frame_header.num_lf_groups()
+                    + 17
+                    + pass_idx * frame_header.num_groups()
+                    + group_idx,
                 modular: Some(modular),
             });
         }
@@ -182,7 +203,9 @@ pub(crate) async fn render_modular<S: Sample, P: ?Sized>(
             let Some((section, allow_partial, offset)) = source else {
                 continue;
             };
-            let owned = item.modular.as_ref()
+            let owned = item
+                .modular
+                .as_ref()
                 .map(|modular| modular.to_owned(tracker))
                 .transpose()?;
             let input = Arc::new(GroupInput {
@@ -203,14 +226,15 @@ pub(crate) async fn render_modular<S: Sample, P: ?Sized>(
             continue;
         }
 
-        let outputs = tasks.run_all(jobs).await
+        let outputs = tasks
+            .run_all(jobs)
+            .await
             .map_err(|_| Error::Modular(jxl_modular::Error::TaskCancelled))?;
         for ((mut item, allow_partial), mut output) in batch.into_iter().zip(outputs) {
             let is_lf = matches!(item.kind, TocGroupKind::LfGroup(_));
             let decoded = output.result.is_ok();
             if let Err(error) = output.result {
-                let suppress = allow_partial
-                    && (!is_lf || !single || error.unexpected_eof());
+                let suppress = allow_partial && (!is_lf || !single || error.unexpected_eof());
                 if !suppress {
                     return Err(error.into());
                 }
@@ -227,11 +251,14 @@ pub(crate) async fn render_modular<S: Sample, P: ?Sized>(
                     complete = modular.finish_with_tasks(tasks, tracker).await?;
                 }
                 if let TocGroupKind::LfGroup(idx) = item.kind {
-                    cache.lf_groups.insert(idx, LfGroup {
-                        lf_coeff: None,
-                        hf_meta: None,
-                        partial: !complete,
-                    });
+                    cache.lf_groups.insert(
+                        idx,
+                        LfGroup {
+                            lf_coeff: None,
+                            hf_meta: None,
+                            partial: !complete,
+                        },
+                    );
                 }
             }
             if let (Some(target), Some(owned)) = (&mut item.modular, output.modular) {
@@ -240,7 +267,10 @@ pub(crate) async fn render_modular<S: Sample, P: ?Sized>(
         }
     }
 
-    modular_image.prepare_subimage()?.finish_with_tasks(tasks, tracker).await?;
+    modular_image
+        .prepare_subimage()?
+        .finish_with_tasks(tasks, tracker)
+        .await?;
 
     let mut fb = ImageWithRegion::new(frame_header.encoded_color_channels(), tracker);
     fb.extend_from_gmodular(gmodular);
@@ -274,4 +304,3 @@ pub fn compute_modular_region<S: Sample>(
         region
     }
 }
-

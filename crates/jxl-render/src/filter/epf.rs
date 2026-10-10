@@ -23,11 +23,8 @@ pub(crate) async fn apply_epf<S: Sample>(
 
     let sigma_width = (region.width as usize).div_ceil(8);
     let sigma_height = (region.height as usize).div_ceil(8);
-    let mut sigma = AlignedGrid::with_alloc_tracker(
-        sigma_width,
-        sigma_height,
-        input.tracker.as_ref(),
-    )?;
+    let mut sigma =
+        AlignedGrid::with_alloc_tracker(sigma_width, sigma_height, input.tracker.as_ref())?;
     let num_lf_groups = frame_header.num_lf_groups() as usize;
     let mut sigma_grid_map = vec![None::<&AlignedGrid<f32>>; num_lf_groups];
     for (&lf_group_idx, lf_group) in lf_groups {
@@ -138,11 +135,8 @@ async fn run_epf_step<const STEP: usize>(
     for base_y in (0..output_height).step_by(STRIPE_HEIGHT) {
         let job_height = (output_height - base_y).min(STRIPE_HEIGHT);
         let mut output = input.allocate_stripe(job_height)?;
-        let mut sigma = AlignedGrid::with_alloc_tracker(
-            width.div_ceil(8),
-            1,
-            input.tracker.as_ref(),
-        )?;
+        let mut sigma =
+            AlignedGrid::with_alloc_tracker(width.div_ceil(8), 1, input.tracker.as_ref())?;
         let input = Arc::clone(&input);
         let metadata = Arc::clone(&metadata);
         jobs.push(Box::new(move || {
@@ -255,4 +249,3 @@ pub(super) const fn epf_dist_offsets<const STEP: usize>() -> &'static [(isize, i
         panic!()
     }
 }
-

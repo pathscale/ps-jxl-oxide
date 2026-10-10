@@ -459,7 +459,8 @@ impl<'dest, S: Sample> TransformedModularSubimage<'dest, S> {
         tracker: Option<&AllocTracker>,
     ) -> Result<bool> {
         for tr in self.header.transform.iter().rev() {
-            tr.inverse_with_tasks(&mut self.grid, self.bit_depth, tasks, tracker).await?;
+            tr.inverse_with_tasks(&mut self.grid, self.bit_depth, tasks, tracker)
+                .await?;
         }
         Ok(!self.partial)
     }
@@ -771,7 +772,9 @@ impl<S: Sample> OwnedModularSubimage<S> {
             bit_depth: self.bit_depth,
             channels,
             meta_channels,
-            image_channels: self.grids.iter_mut()
+            image_channels: self
+                .grids
+                .iter_mut()
                 .map(|grid| TransformedGrid::from(grid.as_subgrid_mut()))
                 .collect(),
         };
@@ -781,10 +784,20 @@ impl<S: Sample> OwnedModularSubimage<S> {
             (result, subimage.is_partial())
         };
         let RecursiveModularImage {
-            header, ma_ctx, channels, meta_channels, image_channels, ..
+            header,
+            ma_ctx,
+            channels,
+            meta_channels,
+            image_channels,
+            ..
         } = image;
         drop(image_channels);
-        self.recursive = Some(OwnedRecursiveState { header, ma_ctx, channels, meta_channels });
+        self.recursive = Some(OwnedRecursiveState {
+            header,
+            ma_ctx,
+            channels,
+            meta_channels,
+        });
         self.partial = partial;
         self.finish_pending = result.is_ok();
         result
@@ -798,15 +811,21 @@ impl<S: Sample> OwnedModularSubimage<S> {
         if !self.finish_pending {
             return Ok(!self.partial);
         }
-        let OwnedRecursiveState { header, ma_ctx, channels, meta_channels } =
-            self.recursive.take().expect("decoded recursive image");
+        let OwnedRecursiveState {
+            header,
+            ma_ctx,
+            channels,
+            meta_channels,
+        } = self.recursive.take().expect("decoded recursive image");
         let mut image = RecursiveModularImage {
             header,
             ma_ctx,
             bit_depth: self.bit_depth,
             channels,
             meta_channels,
-            image_channels: self.grids.iter_mut()
+            image_channels: self
+                .grids
+                .iter_mut()
                 .map(|grid| TransformedGrid::from(grid.as_subgrid_mut()))
                 .collect(),
         };

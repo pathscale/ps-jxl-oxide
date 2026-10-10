@@ -1,4 +1,3 @@
-
 use jxl_frame::{FrameHeader, data::GlobalModular};
 use jxl_grid::{AlignedGrid, AllocTracker, MutableSubgrid};
 use jxl_image::{BitDepth, ImageHeader};
@@ -688,7 +687,6 @@ impl ImageWithRegion {
             .collect()
     }
 }
-
 
 /// Prerocess image before composition.
 ///

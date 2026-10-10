@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use jxl_color::{
-    ColorEncodingWithProfile, ColorTransform, ColourEncoding, EnumColourEncoding,
-    RenderingIntent, TransferFunction,
+    ColorEncodingWithProfile, ColorTransform, ColourEncoding, EnumColourEncoding, RenderingIntent,
+    TransferFunction,
 };
 use jxl_modular::Sample;
 use jxl_threadpool::Tasks;
@@ -15,7 +15,10 @@ use crate::{
 impl RenderContext {
     fn loading_frame_arc(&self) -> Option<Arc<IndexedFrame>> {
         let frame = self.loading_frame()?;
-        self.frames.get(frame.index()).cloned().or_else(|| self.loading_frame.clone())
+        self.frames
+            .get(frame.index())
+            .cloned()
+            .or_else(|| self.loading_frame.clone())
     }
 
     fn reference_slots<S: Sample>(
@@ -31,7 +34,11 @@ impl RenderContext {
             }
         }
         let mut used = [false; 4];
-        if let Some(patches) = cache.lf_global.as_ref().and_then(|global| global.patches.as_ref()) {
+        if let Some(patches) = cache
+            .lf_global
+            .as_ref()
+            .and_then(|global| global.patches.as_ref())
+        {
             for patch in &patches.patches {
                 used[patch.ref_idx as usize] = true;
             }
@@ -69,7 +76,11 @@ impl RenderContext {
             &self.image_header,
             self.requested_image_region,
         );
-        let mut indices: Vec<_> = deps.ref_slots.iter().copied().enumerate()
+        let mut indices: Vec<_> = deps
+            .ref_slots
+            .iter()
+            .copied()
+            .enumerate()
             .filter(|(slot, index)| used[*slot] && *index != usize::MAX)
             .map(|(_, index)| index)
             .collect();
@@ -113,27 +124,45 @@ impl RenderContext {
         let pool = self.pool.clone();
 
         let (mut image, references) = if self.narrow_modular() {
-            let mut cache = self.renders_narrow[index].take()
+            let mut cache = self.renders_narrow[index]
+                .take()
                 .unwrap_or_else(|| RenderCache::new(&frame));
             let (used, patch_slots) = Self::reference_slots(&frame, &mut cache)?;
-            let references = self.resolve_references(&frame, deps, used, patch_slots, tasks).await?;
+            let references = self
+                .resolve_references(&frame, deps, used, patch_slots, tasks)
+                .await?;
             let result = render::render_frame(
-                &frame, references.clone(), &mut cache, image_region, pool.clone(),
-                visibility, tasks,
-            ).await;
+                &frame,
+                references.clone(),
+                &mut cache,
+                image_region,
+                pool.clone(),
+                visibility,
+                tasks,
+            )
+            .await;
             if result.is_err() {
                 self.renders_narrow[index] = Some(cache);
             }
             (result?, references)
         } else {
-            let mut cache = self.renders_wide[index].take()
+            let mut cache = self.renders_wide[index]
+                .take()
                 .unwrap_or_else(|| RenderCache::new(&frame));
             let (used, patch_slots) = Self::reference_slots(&frame, &mut cache)?;
-            let references = self.resolve_references(&frame, deps, used, patch_slots, tasks).await?;
+            let references = self
+                .resolve_references(&frame, deps, used, patch_slots, tasks)
+                .await?;
             let result = render::render_frame(
-                &frame, references.clone(), &mut cache, image_region, pool.clone(),
-                visibility, tasks,
-            ).await;
+                &frame,
+                references.clone(),
+                &mut cache,
+                image_region,
+                pool.clone(),
+                visibility,
+                tasks,
+            )
+            .await;
             if result.is_err() {
                 self.renders_wide[index] = Some(cache);
             }
@@ -151,7 +180,11 @@ impl RenderContext {
         Ok(image)
     }
 
-    fn release_overwritten_reference(&mut self, frame: &IndexedFrame, deps: crate::FrameDependence) {
+    fn release_overwritten_reference(
+        &mut self,
+        frame: &IndexedFrame,
+        deps: crate::FrameDependence,
+    ) {
         let header = frame.header();
         if header.can_reference() {
             let index = deps.ref_slots[header.save_as_reference as usize];
@@ -172,7 +205,10 @@ impl RenderContext {
         keyframe_idx: usize,
         tasks: Tasks,
     ) -> Result<Arc<ImageWithRegion>> {
-        let index = *self.keyframes.get(keyframe_idx).ok_or(Error::IncompleteFrame)?;
+        let index = *self
+            .keyframes
+            .get(keyframe_idx)
+            .ok_or(Error::IncompleteFrame)?;
         let grid = self.render_by_index(index, None, &tasks).await?;
         let frame = Arc::clone(&self.frames[index]);
         self.postprocess_keyframe(&frame, grid, &tasks).await
@@ -191,7 +227,10 @@ impl RenderContext {
             }
         }
         let (frame, grid) = if let Some(grid) = current_frame_grid {
-            (self.loading_frame_arc().ok_or(Error::IncompleteFrame)?, Arc::new(grid))
+            (
+                self.loading_frame_arc().ok_or(Error::IncompleteFrame)?,
+                Arc::new(grid),
+            )
         } else if let Some(index) = self.keyframe_in_progress {
             let grid = self.render_by_index(index, None, &tasks).await?;
             (Arc::clone(&self.frames[index]), grid)
@@ -199,7 +238,10 @@ impl RenderContext {
             return Err(Error::IncompleteFrame);
         };
         let grid = self.postprocess_keyframe(&frame, grid, &tasks).await?;
-        Ok((self.frame(frame.index()).ok_or(Error::IncompleteFrame)?, grid))
+        Ok((
+            self.frame(frame.index()).ok_or(Error::IncompleteFrame)?,
+            grid,
+        ))
     }
 
     pub fn reset_cache(&mut self) {
@@ -207,7 +249,8 @@ impl RenderContext {
         self.loading_render_cache_wide = None;
         self.loading_render_cache_narrow = None;
         for index in 0..self.frames.len() {
-            if self.frames[index].header().frame_type == jxl_frame::header::FrameType::ReferenceOnly {
+            if self.frames[index].header().frame_type == jxl_frame::header::FrameType::ReferenceOnly
+            {
                 continue;
             }
             self.renders_wide[index] = None;
@@ -235,27 +278,47 @@ impl RenderContext {
         let visibility = self.get_previous_frames_visibility(&frame);
         let pool = self.pool.clone();
         let (mut image, references) = if self.narrow_modular() {
-            let mut cache = self.loading_render_cache_narrow.take()
+            let mut cache = self
+                .loading_render_cache_narrow
+                .take()
                 .unwrap_or_else(|| RenderCache::new(&frame));
             let (used, patch_slots) = Self::reference_slots(&frame, &mut cache)?;
-            let references = self.resolve_references(&frame, deps, used, patch_slots, tasks).await?;
+            let references = self
+                .resolve_references(&frame, deps, used, patch_slots, tasks)
+                .await?;
             let result = render::render_frame(
-                &frame, references.clone(), &mut cache, image_region, pool.clone(),
-                visibility, tasks,
-            ).await;
+                &frame,
+                references.clone(),
+                &mut cache,
+                image_region,
+                pool.clone(),
+                visibility,
+                tasks,
+            )
+            .await;
             if result.is_err() {
                 self.loading_render_cache_narrow = Some(cache);
             }
             (result?, references)
         } else {
-            let mut cache = self.loading_render_cache_wide.take()
+            let mut cache = self
+                .loading_render_cache_wide
+                .take()
                 .unwrap_or_else(|| RenderCache::new(&frame));
             let (used, patch_slots) = Self::reference_slots(&frame, &mut cache)?;
-            let references = self.resolve_references(&frame, deps, used, patch_slots, tasks).await?;
+            let references = self
+                .resolve_references(&frame, deps, used, patch_slots, tasks)
+                .await?;
             let result = render::render_frame(
-                &frame, references.clone(), &mut cache, image_region, pool.clone(),
-                visibility, tasks,
-            ).await;
+                &frame,
+                references.clone(),
+                &mut cache,
+                image_region,
+                pool.clone(),
+                visibility,
+                tasks,
+            )
+            .await;
             if result.is_err() {
                 self.loading_render_cache_wide = Some(cache);
             }
@@ -358,4 +421,3 @@ impl RenderContext {
         Ok(Arc::new(grid))
     }
 }
-

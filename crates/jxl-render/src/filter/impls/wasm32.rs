@@ -7,4 +7,3 @@ pub fn epf_row_handler<const STEP: usize>() -> Option<EpfRowHandler> {
 }
 
 pub use super::generic::gabor_row_handler;
-

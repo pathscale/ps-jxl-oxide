@@ -127,12 +127,10 @@ async fn init_noise(
         jobs.push(Box::new(move || group.fill(seed0, seed1)));
     }
 
-    let noise_groups = Arc::new(
-        tasks
-            .run_all(jobs)
-            .await
-            .map_err(|_| Error::NotSupported("noise task cancelled or returned an invalid output"))?,
-    );
+    let noise_groups =
+        Arc::new(tasks.run_all(jobs).await.map_err(|_| {
+            Error::NotSupported("noise task cancelled or returned an invalid output")
+        })?);
 
     // Each job owns all three convolved channels and private 5×5 row scratch.
     let mut jobs: Vec<Box<dyn FnOnce() -> [AlignedGrid<f32>; 3] + Send + 'static>> =
@@ -147,11 +145,8 @@ async fn init_noise(
             AlignedGrid::with_alloc_tracker(group_width, group_height, tracker)?,
             AlignedGrid::with_alloc_tracker(group_width, group_height, tracker)?,
         ];
-        let mut rows = AlignedGrid::with_alloc_tracker(
-            group_width + PADDING * 2,
-            1 + PADDING * 2,
-            tracker,
-        )?;
+        let mut rows =
+            AlignedGrid::with_alloc_tracker(group_width + PADDING * 2, 1 + PADDING * 2, tracker)?;
         let noise_groups = Arc::clone(&noise_groups);
 
         jobs.push(Box::new(move || {
@@ -218,11 +213,7 @@ struct NoiseGroup {
 }
 
 impl NoiseGroup {
-    fn allocate(
-        width: usize,
-        height: usize,
-        tracker: Option<&AllocTracker>,
-    ) -> Result<Self> {
+    fn allocate(width: usize, height: usize, tracker: Option<&AllocTracker>) -> Result<Self> {
         let width_n2 = width.div_ceil(N * 2);
         let stride = width_n2 * N * 2;
         let elems = stride * height * 3;
@@ -476,4 +467,3 @@ fn split_mix_64(z: Wrapping<u64>) -> Wrapping<u64> {
     let z = (z ^ (z >> 27)) * Wrapping(0x94D049BB133111EB);
     z ^ (z >> 31)
 }
-

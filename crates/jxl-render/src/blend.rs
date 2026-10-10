@@ -1,4 +1,3 @@
-
 use jxl_frame::{
     Frame,
     data::{BlendingModeInformation, PatchRef},
@@ -189,7 +188,6 @@ pub(crate) fn blend(
     let full_frame_region = Region::with_size(header.width, header.height);
     let output_image_region = output_frame_region.translate(header.x0, header.y0);
 
-
     let color_channels = new_grid.color_channels();
     let mut output_grid = ImageWithRegion::new(color_channels, tracker);
     output_grid.set_ct_done(new_grid.ct_done());
@@ -360,7 +358,6 @@ pub(crate) fn blend(
         blend_single(target_subgrid, new_grid.as_subgrid(), &blend_params);
         output_grid.append_channel(target_grid, target_region);
     }
-
 
     output_grid.set_blend_done(true);
     Ok(output_grid)

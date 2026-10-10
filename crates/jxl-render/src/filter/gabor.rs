@@ -94,4 +94,3 @@ pub(super) type GaborRowHandler = for<'a> unsafe fn(GaborRow<'a>);
 pub(crate) fn run_gabor_row_generic(row: GaborRow) {
     super::impls::generic::gabor::run_gabor_row_generic(row)
 }
-

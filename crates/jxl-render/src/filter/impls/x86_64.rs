@@ -21,4 +21,3 @@ pub fn gabor_row_handler() -> GaborRowHandler {
         run_gabor_row_generic
     }
 }
-

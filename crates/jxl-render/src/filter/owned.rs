@@ -94,8 +94,8 @@ impl FilterImage {
     pub(super) fn copy_border(&self, channel: usize, output_y: usize, output: &mut [f32]) {
         let source_left = self.region.left.abs_diff(self.output_region.left) as usize;
         let source_top = self.region.top.abs_diff(self.output_region.top) as usize;
-        let source = &self.raw_row(channel, source_top + output_y)
-            [source_left..source_left + output.len()];
+        let source =
+            &self.raw_row(channel, source_top + output_y)[source_left..source_left + output.len()];
         if self.filter_y(output_y).is_none() {
             output.copy_from_slice(source);
             return;
@@ -154,4 +154,3 @@ impl FilterImage {
         Ok(())
     }
 }
-

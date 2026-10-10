@@ -329,8 +329,10 @@ impl RenderContext {
             self.keyframe_in_progress = Some(idx);
         }
 
-        self.renders_narrow.push(self.loading_render_cache_narrow.take());
-        self.renders_wide.push(self.loading_render_cache_wide.take());
+        self.renders_narrow
+            .push(self.loading_render_cache_narrow.take());
+        self.renders_wide
+            .push(self.loading_render_cache_wide.take());
         self.rendered_frames.push(None);
 
         self.frames.push(Arc::clone(&frame));
@@ -431,7 +433,6 @@ impl RenderContext {
 }
 
 impl RenderContext {
-
     fn get_previous_frames_visibility<'a>(&'a self, frame: &'a IndexedFrame) -> (usize, usize) {
         let frame_idx = frame.index();
         let (is_keyframe, keyframe_idx) = match self.keyframes.binary_search(&frame_idx) {
@@ -456,7 +457,6 @@ impl RenderContext {
         (visible_frames_num, invisible_frames_num)
     }
 }
-
 
 /// Frame with its index in the image.
 #[derive(Debug)]

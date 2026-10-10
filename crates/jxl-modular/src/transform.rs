@@ -102,11 +102,13 @@ impl TransformInfo {
                 let mut kernel = rct.clone();
                 kernel.begin_c = 0;
                 owned::run_stripes(&mut views, true, tasks, tracker, move |views| {
-                    let mut grids: Vec<_> = views.iter_mut()
+                    let mut grids: Vec<_> = views
+                        .iter_mut()
                         .map(|grid| TransformedGrid::from(grid.borrow_mut()))
                         .collect();
                     kernel.inverse(&mut grids);
-                }).await?;
+                })
+                .await?;
             }
             Self::Palette(pal) => pal.inverse(grids, bit_depth),
             Self::Squeeze(sq) => sq.inverse_with_tasks(grids, tasks, tracker).await?,
@@ -510,7 +512,8 @@ impl Squeeze {
                     move |views| {
                         SqueezeParams::run_kernel(&mut views[0], horizontal);
                     },
-                ).await?;
+                )
+                .await?;
             }
         }
         Ok(())
@@ -566,4 +569,3 @@ impl SqueezeParams {
         Self::run_kernel(grid, self.horizontal);
     }
 }
-

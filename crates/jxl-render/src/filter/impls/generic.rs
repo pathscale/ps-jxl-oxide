@@ -15,4 +15,3 @@ pub fn epf_row_handler<const STEP: usize>() -> Option<EpfRowHandler> {
 pub fn gabor_row_handler() -> GaborRowHandler {
     run_gabor_row_generic
 }
-

@@ -61,25 +61,33 @@ where
                 let mut channel =
                     AlignedGrid::with_alloc_tracker(stripe_width, stripe_height, tracker)?;
                 for y in 0..stripe_height {
-                    channel.get_row_mut(y).copy_from_slice(
-                        &grid.get_row(top + y)[left..left + stripe_width],
-                    );
+                    channel
+                        .get_row_mut(y)
+                        .copy_from_slice(&grid.get_row(top + y)[left..left + stripe_width]);
                 }
                 channels.push(channel);
             }
             let kernel = Arc::clone(&kernel);
             jobs.push(Box::new(move || {
-                let mut views: Vec<_> = channels.iter_mut()
+                let mut views: Vec<_> = channels
+                    .iter_mut()
                     .map(AlignedGrid::as_subgrid_mut)
                     .collect();
                 kernel(&mut views);
                 drop(views);
-                Stripe { left, top, channels }
+                Stripe {
+                    left,
+                    top,
+                    channels,
+                }
             }));
             start += count;
         }
 
-        let outputs = tasks.run_all(jobs).await.map_err(|_| Error::TaskCancelled)?;
+        let outputs = tasks
+            .run_all(jobs)
+            .await
+            .map_err(|_| Error::TaskCancelled)?;
         for output in outputs {
             for (grid, channel) in grids.iter_mut().zip(output.channels) {
                 let width = channel.width();
@@ -92,4 +100,3 @@ where
     }
     Ok(())
 }
-

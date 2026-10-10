@@ -32,4 +32,3 @@ impl<S: Sample> RenderCache<S> {
         }
     }
 }
-

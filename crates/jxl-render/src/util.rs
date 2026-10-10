@@ -448,4 +448,3 @@ impl<S: Clone> PaddedGrid<S> {
         }
     }
 }
-
