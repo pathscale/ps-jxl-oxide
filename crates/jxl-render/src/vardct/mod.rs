@@ -1,6 +1,6 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 
-use std::collections::HashMap;
+use alloc::collections::BTreeMap;
 
 use jxl_frame::{
     FrameHeader,
@@ -43,7 +43,7 @@ mod generic;
 use generic as impls;
 
 pub(crate) async fn render_vardct<S: Sample>(
-    frame: &std::sync::Arc<IndexedFrame>,
+    frame: &alloc::sync::Arc<IndexedFrame>,
     lf_frame: Option<&Reference>,
     cache: &mut RenderCache<S>,
     region: Region,
@@ -115,10 +115,10 @@ pub fn dequant_hf_varblock_grouped<S: Sample>(
     image_header: &ImageHeader,
     frame_header: &FrameHeader,
     lf_global: &LfGlobal<S>,
-    lf_groups: &HashMap<u32, LfGroup<S>>,
+    lf_groups: &BTreeMap<u32, LfGroup<S>>,
     hf_global: &HfGlobal,
 ) {
-    let shifts_cbycr: [_; 3] = std::array::from_fn(|idx| {
+    let shifts_cbycr: [_; 3] = core::array::from_fn(|idx| {
         ChannelShift::from_jpeg_upsampling(frame_header.jpeg_upsampling, idx)
     });
     let oim = &image_header.metadata.opsin_inverse_matrix;
@@ -126,9 +126,9 @@ pub fn dequant_hf_varblock_grouped<S: Sample>(
     let dequant_matrices = &hf_global.dequant_matrices;
 
     let qm_scale = [
-        0.8f32.powi(frame_header.x_qm_scale as i32 - 2),
+        crate::math::powi(0.8f32, frame_header.x_qm_scale as i32 - 2),
         1.0f32,
-        0.8f32.powi(frame_header.b_qm_scale as i32 - 2),
+        crate::math::powi(0.8f32, frame_header.b_qm_scale as i32 - 2),
     ];
 
     let quant_bias_numerator = oim.quant_bias_numerator;
@@ -278,11 +278,11 @@ pub fn transform_with_lf_grouped<S: Sample>(
     coeff_out: &mut [MutableSubgrid<'_, f32>; 3],
     group_idx: u32,
     frame_header: &FrameHeader,
-    lf_groups: &HashMap<u32, LfGroup<S>>,
+    lf_groups: &BTreeMap<u32, LfGroup<S>>,
 ) {
     let lf_regions = <[_; 3]>::try_from(&lf.regions_and_shifts()[..3]).unwrap();
     let [lf_x, lf_y, lf_b] = lf.as_color_floats();
-    let shifts_cbycr: [_; 3] = std::array::from_fn(|idx| {
+    let shifts_cbycr: [_; 3] = core::array::from_fn(|idx| {
         ChannelShift::from_jpeg_upsampling(frame_header.jpeg_upsampling, idx)
     });
 

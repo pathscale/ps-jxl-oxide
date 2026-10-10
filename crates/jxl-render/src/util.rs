@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 
 use jxl_color::{
     ColorEncodingWithProfile, ColorTransform, ColourEncoding, ColourSpace, EnumColourEncoding,
@@ -125,7 +125,7 @@ pub(crate) fn pad_color_region(
 pub(crate) async fn load_lf_groups<S: Sample>(
     frame: &Arc<IndexedFrame>,
     lf_global: &Arc<LfGlobal<S>>,
-    lf_groups: &mut std::collections::HashMap<u32, LfGroup<S>>,
+    lf_groups: &mut alloc::collections::BTreeMap<u32, LfGroup<S>>,
     mut gmodular: GlobalModular<S>,
     lf_region: Region,
     parser: &mut FrameParser,
@@ -138,7 +138,7 @@ pub(crate) async fn load_lf_groups<S: Sample>(
     }
     let frame = Arc::clone(frame);
     let lf_global = Arc::clone(lf_global);
-    let mut groups = std::mem::take(lf_groups);
+    let mut groups = core::mem::take(lf_groups);
     let mut task_parser = parser.clone();
     // The current Modular layout has merged borrowed leaders and members. Keep its
     // allocation in one owner until the owned Modular layout can split this batch.
@@ -176,7 +176,7 @@ pub(crate) async fn load_lf_groups<S: Sample>(
 async fn load_independent_lf_groups<S: Sample>(
     frame: &Arc<IndexedFrame>,
     lf_global: &Arc<LfGlobal<S>>,
-    lf_groups: &mut std::collections::HashMap<u32, LfGroup<S>>,
+    lf_groups: &mut alloc::collections::BTreeMap<u32, LfGroup<S>>,
     lf_region: Region,
     tasks: &Tasks,
 ) -> Result<Option<ImageWithRegion>> {
@@ -196,7 +196,7 @@ async fn load_independent_lf_groups<S: Sample>(
         }
         let frame = Arc::clone(frame);
         let lf_global = Arc::clone(lf_global);
-        let mut groups = std::collections::HashMap::new();
+        let mut groups = alloc::collections::BTreeMap::new();
         if let Some(group) = lf_groups.remove(&index) {
             groups.insert(index, group);
         }
@@ -236,7 +236,7 @@ async fn load_independent_lf_groups<S: Sample>(
     if lf_global.vardct.is_none() || header.flags.use_lf_frame() {
         return Ok(None);
     }
-    let shifts: [_; 3] = std::array::from_fn(|index| {
+    let shifts: [_; 3] = core::array::from_fn(|index| {
         ChannelShift::from_jpeg_upsampling(header.jpeg_upsampling, index)
     });
     let mut image = ImageWithRegion::new(3, frame.alloc_tracker());
@@ -274,7 +274,7 @@ async fn load_independent_lf_groups<S: Sample>(
 fn load_lf_groups_inner<S: Sample>(
     frame: &IndexedFrame,
     lf_global: &LfGlobal<S>,
-    lf_groups: &mut std::collections::HashMap<u32, LfGroup<S>>,
+    lf_groups: &mut alloc::collections::BTreeMap<u32, LfGroup<S>>,
     mlf_groups: Vec<TransformedModularSubimage<S>>,
     lf_region: Region,
     parser: &mut FrameParser,
@@ -293,7 +293,7 @@ fn load_lf_groups_inner<S: Sample>(
     let has_lf_frame = frame_header.flags.use_lf_frame();
     let jpeg_upsampling = frame_header.jpeg_upsampling;
     let shifts_cbycr: [_; 3] =
-        std::array::from_fn(|idx| ChannelShift::from_jpeg_upsampling(jpeg_upsampling, idx));
+        core::array::from_fn(|idx| ChannelShift::from_jpeg_upsampling(jpeg_upsampling, idx));
     let mut lf_xyb = if lf_global_vardct.is_some() && !frame_header.flags.use_lf_frame() {
         let tracker = frame.alloc_tracker();
         let mut out = ImageWithRegion::new(3, tracker);
@@ -339,7 +339,7 @@ fn load_lf_groups_inner<S: Sample>(
     let mlf_groups = mlf_groups
         .into_iter()
         .map(Some)
-        .chain(std::iter::repeat_with(|| None));
+        .chain(core::iter::repeat_with(|| None));
     let mut lf_groups_out = (0..num_lf_groups)
         .map(|idx| LfGroupJob {
             idx,
@@ -366,7 +366,7 @@ fn load_lf_groups_inner<S: Sample>(
                 + lf_group_x.wrapping_add_signed(-lf_group_base_x);
             let lf_xyb = lf_xyb_groups.as_mut().map(|lf_xyb_groups| {
                 lf_xyb_groups.each_mut().map(|groups| {
-                    std::mem::replace(&mut groups[xyb_group_idx as usize], MutableSubgrid::empty())
+                    core::mem::replace(&mut groups[xyb_group_idx as usize], MutableSubgrid::empty())
                 })
             });
 

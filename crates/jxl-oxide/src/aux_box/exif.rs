@@ -6,8 +6,8 @@ pub struct RawExif<'image> {
     payload: &'image [u8],
 }
 
-impl std::fmt::Debug for RawExif<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for RawExif<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RawExif")
             .field("tiff_header_offset", &self.tiff_header_offset)
             .finish_non_exhaustive()

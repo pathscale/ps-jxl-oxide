@@ -1,3 +1,5 @@
+use crate::math::FloatMath;
+
 /// Applies transform from YCbCr to RGB.
 ///
 /// Channels are expected to be in CbYCr order.
@@ -6,7 +8,10 @@ pub fn ycbcr_to_rgb(fb_cbycr: [&mut [f32]; 3]) {
 
     #[cfg(target_arch = "x86_64")]
     {
-        if is_x86_feature_detected!("avx") && is_x86_feature_detected!("fma") {
+        if is_x86_feature_detected!("avx")
+            && is_x86_feature_detected!("fma")
+            && (cfg!(feature = "std") || cfg!(target_feature = "avx2"))
+        {
             // SAFETY: Feature set is checked above.
             return unsafe { run_x86_64_avx2([cb, y, cr]) };
         }
@@ -14,7 +19,7 @@ pub fn ycbcr_to_rgb(fb_cbycr: [&mut [f32]; 3]) {
 
     #[cfg(target_arch = "aarch64")]
     {
-        if std::arch::is_aarch64_feature_detected!("neon") {
+        if is_aarch64_feature_detected!("neon") {
             // SAFETY: Feature set is checked above.
             return unsafe { run_aarch64_neon([cb, y, cr]) };
         }
@@ -46,11 +51,11 @@ fn run_generic([cb, y, cr]: [&mut [f32]; 3]) {
         let y = *g + 128.0 / 255.0;
         let cr = *b;
 
-        *r = cr.mul_add(1.402, y);
-        *g = cb.mul_add(
+        *r = cr.math_mul_add(1.402, y);
+        *g = cb.math_mul_add(
             -0.114 * 1.772 / 0.587,
-            cr.mul_add(-0.299 * 1.402 / 0.587, y),
+            cr.math_mul_add(-0.299 * 1.402 / 0.587, y),
         );
-        *b = cb.mul_add(1.772, y);
+        *b = cb.math_mul_add(1.772, y);
     }
 }

@@ -1,5 +1,4 @@
-use std::arch::aarch64::*;
-use std::arch::is_aarch64_feature_detected;
+use core::arch::aarch64::*;
 
 use jxl_grid::{MutableSubgrid, SharedSubgrid};
 use jxl_modular::ChannelShift;

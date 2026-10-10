@@ -1,4 +1,6 @@
 use crate::Result;
+use alloc::vec;
+use alloc::vec::Vec;
 use jxl_bitstream::{Bitstream, U};
 use jxl_oxide_common::Bundle;
 
@@ -15,8 +17,8 @@ pub struct Toc {
     total_size: usize,
 }
 
-impl std::fmt::Debug for Toc {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Toc {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Toc")
             .field("num_lf_groups", &self.num_lf_groups)
             .field("num_groups", &self.num_groups)
@@ -69,18 +71,18 @@ pub enum TocGroupKind {
 }
 
 impl Ord for TocGroupKind {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         match (self, other) {
-            (x, y) if x == y => std::cmp::Ordering::Equal,
-            (Self::All, _) => std::cmp::Ordering::Less,
-            (_, Self::All) => std::cmp::Ordering::Greater,
-            (Self::LfGlobal, _) => std::cmp::Ordering::Less,
-            (_, Self::LfGlobal) => std::cmp::Ordering::Greater,
+            (x, y) if x == y => core::cmp::Ordering::Equal,
+            (Self::All, _) => core::cmp::Ordering::Less,
+            (_, Self::All) => core::cmp::Ordering::Greater,
+            (Self::LfGlobal, _) => core::cmp::Ordering::Less,
+            (_, Self::LfGlobal) => core::cmp::Ordering::Greater,
             (Self::LfGroup(g_self), Self::LfGroup(g_other)) => g_self.cmp(g_other),
-            (Self::LfGroup(_), _) => std::cmp::Ordering::Less,
-            (_, Self::LfGroup(_)) => std::cmp::Ordering::Greater,
-            (Self::HfGlobal, _) => std::cmp::Ordering::Less,
-            (_, Self::HfGlobal) => std::cmp::Ordering::Greater,
+            (Self::LfGroup(_), _) => core::cmp::Ordering::Less,
+            (_, Self::LfGroup(_)) => core::cmp::Ordering::Greater,
+            (Self::HfGlobal, _) => core::cmp::Ordering::Less,
+            (_, Self::HfGlobal) => core::cmp::Ordering::Greater,
             (
                 Self::GroupPass {
                     pass_idx: p_self,
@@ -96,7 +98,7 @@ impl Ord for TocGroupKind {
 }
 
 impl PartialOrd for TocGroupKind {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
@@ -213,7 +215,7 @@ impl Bundle<&crate::FrameHeader> for Toc {
         bitstream.zero_pad_to_byte()?;
         let sizes = (0..entry_count)
             .map(|_| bitstream.read_u32(U(10), 1024 + U(14), 17408 + U(22), 4211712 + U(30)))
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            .collect::<core::result::Result<Vec<_>, _>>()?;
         bitstream.zero_pad_to_byte()?;
 
         let mut offsets = Vec::with_capacity(sizes.len());
@@ -266,7 +268,7 @@ impl Bundle<&crate::FrameHeader> for Toc {
                 let Some(entry) = seen.get_mut(index) else {
                     return Err(crate::Error::InvalidTocPermutation);
                 };
-                if std::mem::replace(entry, true) {
+                if core::mem::replace(entry, true) {
                     return Err(crate::Error::InvalidTocPermutation);
                 }
             }

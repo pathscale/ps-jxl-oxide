@@ -130,7 +130,7 @@ fn adaptive_lf_smoothing_subsampled_impl(
         }
     }
 
-    for ((w, h), in_lf) in std::iter::zip(dims, &in_xyb) {
+    for ((w, h), in_lf) in core::iter::zip(dims, &in_xyb) {
         assert_eq!(in_lf.len(), w * h);
     }
 
@@ -170,7 +170,7 @@ fn adaptive_lf_smoothing_subsampled_impl(
     let mut current_row_b = vec![0.0; dims[2].0];
     for row in 0..height {
         let coords_y = shifts.map(|shift| row >> shift.vshift());
-        if std::iter::zip(coords_y, dims).any(|(row, (_, height))| row == 0 || row == height - 1) {
+        if core::iter::zip(coords_y, dims).any(|(row, (_, height))| row == 0 || row == height - 1) {
             continue;
         }
 
@@ -191,12 +191,12 @@ fn adaptive_lf_smoothing_subsampled_impl(
 
         for col in 0..width {
             let coords_x = shifts.map(|shift| col >> shift.hshift());
-            if std::iter::zip(coords_x, dims).any(|(col, (width, _))| col == 0 || col == width - 1)
+            if core::iter::zip(coords_x, dims).any(|(col, (width, _))| col == 0 || col == width - 1)
             {
                 continue;
             }
 
-            let skip_update: [_; 3] = std::array::from_fn(|idx| {
+            let skip_update: [_; 3] = core::array::from_fn(|idx| {
                 let shift = shifts[idx];
                 (coords_y[idx] << shift.vshift()) != row || (coords_x[idx] << shift.hshift()) != col
             });

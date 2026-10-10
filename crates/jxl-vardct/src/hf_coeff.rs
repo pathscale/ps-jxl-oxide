@@ -1,3 +1,4 @@
+use alloc::vec;
 use jxl_bitstream::Bitstream;
 use jxl_grid::{AllocTracker, MutableSubgrid, SharedSubgrid};
 use jxl_modular::{ChannelShift, Sample};
@@ -57,7 +58,7 @@ pub fn write_hf_coeff<S: Sample>(
         (lf_thresholds[0].len() + 1) * (lf_thresholds[1].len() + 1) * (lf_thresholds[2].len() + 1);
     let hf_idx_mul = qf_thresholds.len() + 1;
     let upsampling_shifts: [_; 3] =
-        std::array::from_fn(|idx| ChannelShift::from_jpeg_upsampling(jpeg_upsampling, idx));
+        core::array::from_fn(|idx| ChannelShift::from_jpeg_upsampling(jpeg_upsampling, idx));
     let hshifts = upsampling_shifts.map(|shift| shift.hshift());
     let vshifts = upsampling_shifts.map(|shift| shift.vshift());
 
@@ -228,7 +229,7 @@ pub fn write_hf_coeff<S: Sample>(
                     let coeff = jxl_bitstream::unpack_signed(ucoeff) << coeff_shift;
                     let (mut dx, mut dy) = coeff_coord;
                     if dct_select.need_transpose() {
-                        std::mem::swap(&mut dx, &mut dy);
+                        core::mem::swap(&mut dx, &mut dy);
                     }
                     let x = sx * 8 + dx as usize;
                     let y = sy * 8 + dy as usize;

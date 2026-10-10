@@ -155,12 +155,12 @@ fn dct4(input: [f32; 4], direction: DctDirection) -> [f32; 4] {
 
         [
             (sum03 + sum12) / 4.0,
-            out0 * std::f32::consts::SQRT_2 + out1,
+            out0 * core::f32::consts::SQRT_2 + out1,
             (sum03 - sum12) / 4.0,
             out1,
         ]
     } else {
-        let tmp0 = input[1] * std::f32::consts::SQRT_2;
+        let tmp0 = input[1] * core::f32::consts::SQRT_2;
         let tmp1 = input[1] + input[3];
         let out0 = (tmp0 + tmp1) * sec0;
         let out1 = (tmp0 - tmp1) * sec1;
@@ -221,7 +221,7 @@ fn dct(input_output: &mut [f32], scratch: &mut [f32], direction: DctDirection) {
                 io[idx * 2] = v;
             }
             let mut output1 = dct4(input1, DctDirection::Forward);
-            output1[0] *= std::f32::consts::SQRT_2;
+            output1[0] *= core::f32::consts::SQRT_2;
             for idx in 0..3 {
                 io[idx * 2 + 1] = output1[idx] + output1[idx + 1];
             }
@@ -229,7 +229,7 @@ fn dct(input_output: &mut [f32], scratch: &mut [f32], direction: DctDirection) {
         } else {
             let input0 = [io[0], io[2], io[4], io[6]];
             let input1 = [
-                io[1] * std::f32::consts::SQRT_2,
+                io[1] * core::f32::consts::SQRT_2,
                 io[3] + io[1],
                 io[5] + io[3],
                 io[7] + io[5],
@@ -259,7 +259,7 @@ fn dct(input_output: &mut [f32], scratch: &mut [f32], direction: DctDirection) {
         }
         dct(input0, output0, DctDirection::Forward);
         dct(input1, output1, DctDirection::Forward);
-        input1[0] *= std::f32::consts::SQRT_2;
+        input1[0] *= core::f32::consts::SQRT_2;
         for idx in 0..(n / 2 - 1) {
             input1[idx] += input1[idx + 1];
         }
@@ -278,7 +278,7 @@ fn dct(input_output: &mut [f32], scratch: &mut [f32], direction: DctDirection) {
         for idx in 1..(n / 2) {
             input1[n / 2 - idx] += input1[n / 2 - idx - 1];
         }
-        input1[0] *= std::f32::consts::SQRT_2;
+        input1[0] *= core::f32::consts::SQRT_2;
         let (output0, output1) = input_output.split_at_mut(n / 2);
         dct(input0, output0, DctDirection::Inverse);
         dct(input1, output1, DctDirection::Inverse);
@@ -307,12 +307,14 @@ mod tests {
         for (k, output) in io.iter().enumerate() {
             let mut exp_value = 0.0f64;
             for (n, input) in original.iter().enumerate() {
-                let cos = ((k * (2 * n + 1)) as f64 / s as f64 * std::f64::consts::FRAC_PI_2).cos();
+                let cos = crate::math::cos64(
+                    (k * (2 * n + 1)) as f64 / s as f64 * core::f64::consts::FRAC_PI_2,
+                );
                 exp_value += *input as f64 * cos;
             }
             exp_value /= s as f64;
             if k != 0 {
-                exp_value *= std::f64::consts::SQRT_2;
+                exp_value *= core::f64::consts::SQRT_2;
             }
 
             let q_expected = (exp_value * 65536.0) as i32;
@@ -332,12 +334,14 @@ mod tests {
         for (k, output) in io.iter().enumerate() {
             let mut exp_value = 0.0f64;
             for (n, input) in original.iter().enumerate() {
-                let cos = ((k * (2 * n + 1)) as f64 / s as f64 * std::f64::consts::FRAC_PI_2).cos();
+                let cos = crate::math::cos64(
+                    (k * (2 * n + 1)) as f64 / s as f64 * core::f64::consts::FRAC_PI_2,
+                );
                 exp_value += *input as f64 * cos;
             }
             exp_value /= s as f64;
             if k != 0 {
-                exp_value *= std::f64::consts::SQRT_2;
+                exp_value *= core::f64::consts::SQRT_2;
             }
 
             let q_expected = (exp_value * 65536.0) as i32;
@@ -357,12 +361,14 @@ mod tests {
         for (k, output) in io.iter().enumerate() {
             let mut exp_value = 0.0f64;
             for (n, input) in original.iter().enumerate() {
-                let cos = ((k * (2 * n + 1)) as f64 / s as f64 * std::f64::consts::FRAC_PI_2).cos();
+                let cos = crate::math::cos64(
+                    (k * (2 * n + 1)) as f64 / s as f64 * core::f64::consts::FRAC_PI_2,
+                );
                 exp_value += *input as f64 * cos;
             }
             exp_value /= s as f64;
             if k != 0 {
-                exp_value *= std::f64::consts::SQRT_2;
+                exp_value *= core::f64::consts::SQRT_2;
             }
 
             let q_expected = (exp_value * 65536.0) as i32;
@@ -382,8 +388,10 @@ mod tests {
         for (k, output) in io.iter().enumerate() {
             let mut exp_value = original[0] as f64;
             for (n, input) in original.iter().enumerate().skip(1) {
-                let cos = ((n * (2 * k + 1)) as f64 / s as f64 * std::f64::consts::FRAC_PI_2).cos();
-                exp_value += *input as f64 * cos * std::f64::consts::SQRT_2;
+                let cos = crate::math::cos64(
+                    (n * (2 * k + 1)) as f64 / s as f64 * core::f64::consts::FRAC_PI_2,
+                );
+                exp_value += *input as f64 * cos * core::f64::consts::SQRT_2;
             }
 
             let q_expected = (exp_value * 65536.0) as i32;
@@ -403,8 +411,10 @@ mod tests {
         for (k, output) in io.iter().enumerate() {
             let mut exp_value = original[0] as f64;
             for (n, input) in original.iter().enumerate().skip(1) {
-                let cos = ((n * (2 * k + 1)) as f64 / s as f64 * std::f64::consts::FRAC_PI_2).cos();
-                exp_value += *input as f64 * cos * std::f64::consts::SQRT_2;
+                let cos = crate::math::cos64(
+                    (n * (2 * k + 1)) as f64 / s as f64 * core::f64::consts::FRAC_PI_2,
+                );
+                exp_value += *input as f64 * cos * core::f64::consts::SQRT_2;
             }
 
             let q_expected = (exp_value * 65536.0) as i32;
@@ -424,8 +434,10 @@ mod tests {
         for (k, output) in io.iter().enumerate() {
             let mut exp_value = original[0] as f64;
             for (n, input) in original.iter().enumerate().skip(1) {
-                let cos = ((n * (2 * k + 1)) as f64 / s as f64 * std::f64::consts::FRAC_PI_2).cos();
-                exp_value += *input as f64 * cos * std::f64::consts::SQRT_2;
+                let cos = crate::math::cos64(
+                    (n * (2 * k + 1)) as f64 / s as f64 * core::f64::consts::FRAC_PI_2,
+                );
+                exp_value += *input as f64 * cos * core::f64::consts::SQRT_2;
             }
 
             let q_expected = (exp_value * 65536.0) as i32;

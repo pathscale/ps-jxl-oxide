@@ -1,3 +1,5 @@
+use alloc::vec;
+use alloc::vec::Vec;
 use jxl_bitstream::{Bitstream, U};
 use jxl_grid::AllocTracker;
 use jxl_modular::{ChannelShift, MaConfig, Modular, ModularParams, Sample};

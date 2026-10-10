@@ -1,3 +1,5 @@
+use alloc::vec::Vec;
+
 use jxl_frame::{FrameHeader, data::GlobalModular};
 use jxl_grid::{AlignedGrid, AllocTracker};
 use jxl_image::{BitDepth, ImageHeader};
@@ -283,7 +285,7 @@ impl ImageWithRegion {
                 .buffer
                 .iter()
                 .map(|x| x.try_clone())
-                .collect::<std::result::Result<_, _>>()?,
+                .collect::<core::result::Result<_, _>>()?,
             regions: self.regions.clone(),
             color_channels: self.color_channels,
             ct_done: self.ct_done,
@@ -314,7 +316,7 @@ impl ImageWithRegion {
 
     #[inline]
     pub fn take_buffer(&mut self) -> Vec<ImageBuffer> {
-        std::mem::take(&mut self.buffer)
+        core::mem::take(&mut self.buffer)
     }
 
     #[inline]
@@ -473,7 +475,7 @@ impl ImageWithRegion {
         ec_to_color_only: bool,
         tasks: &jxl_threadpool::Tasks,
     ) -> Result<()> {
-        use std::sync::Arc;
+        use alloc::sync::Arc;
         use tracing::Instrument;
 
         if frame_header.upsampling != 1 && self.buffer[0].as_float().is_none() {
@@ -512,7 +514,7 @@ impl ImageWithRegion {
             let width = downsampled_valid_region.width;
             let height = downsampled_valid_region.height;
 
-            let source = Arc::new(std::mem::replace(grid, AlignedGrid::empty()));
+            let source = Arc::new(core::mem::replace(grid, AlignedGrid::empty()));
             let input = crate::features::UpsamplingInput::new(
                 Arc::clone(&source),
                 left as usize,
@@ -678,7 +680,7 @@ pub(crate) async fn composite_preprocess(
 
     if frame_header.can_reference() {
         let bit_depth_it =
-            std::iter::repeat_n(image_header.metadata.bit_depth, grid.color_channels)
+            core::iter::repeat_n(image_header.metadata.bit_depth, grid.color_channels)
                 .chain(image_header.metadata.ec_info.iter().map(|ec| ec.bit_depth));
         for (buffer, bit_depth) in grid.buffer.iter_mut().zip(bit_depth_it) {
             buffer.convert_to_float_modular(bit_depth)?;

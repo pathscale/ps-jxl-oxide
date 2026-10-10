@@ -32,7 +32,7 @@ pub fn apply_jpeg_upsampling_single(
 
         let last_sample = *row.last().unwrap();
         let last_item = [last_sample; 2];
-        let adj_samples = row.windows(2).chain(std::iter::once(last_item.as_ref()));
+        let adj_samples = row.windows(2).chain(core::iter::once(last_item.as_ref()));
 
         let mut prev_sample = *row.first().unwrap();
         let it = adj_samples.zip(out_row.chunks_mut(2));

@@ -13,44 +13,73 @@ edition = "2024"
 
 [dependencies]
 bytemuck.workspace = true
-tracing.workspace = true
+libm = { version = "0.2", default-features = false, optional = true }
+tracing = { version = "0.1.40", default-features = false }
 
 [dependencies.jxl-bitstream]
 version = "1.0.0"
 path = "../jxl-bitstream"
+default-features = false
 
 [dependencies.jxl-coding]
 version = "1.0.0"
 path = "../jxl-coding"
+default-features = false
 
 [dependencies.jxl-color]
 version = "0.11.0"
 path = "../jxl-color"
+default-features = false
 
 [dependencies.jxl-frame]
 version = "0.13.2"
 path = "../jxl-frame"
+default-features = false
 
 [dependencies.jxl-grid]
 version = "0.6.2"
 path = "../jxl-grid"
+default-features = false
 
 [dependencies.jxl-image]
 version = "0.13.0"
 path = "../jxl-image"
+default-features = false
 
 [dependencies.jxl-modular]
 version = "0.11.3"
 path = "../jxl-modular"
+default-features = false
 
 [dependencies.jxl-oxide-common]
 version = "1.0.0"
 path = "../jxl-oxide-common"
+default-features = false
 
 [dependencies.jxl-threadpool]
 version = "1.0.0"
 path = "../jxl-threadpool"
+default-features = false
 
 [dependencies.jxl-vardct]
 version = "0.11.0"
 path = "../jxl-vardct"
+default-features = false
+
+[features]
+default = ["std"]
+std = [
+    "tracing/std",
+    "jxl-bitstream/std",
+    "jxl-coding/std",
+    "jxl-color/std",
+    "jxl-frame/std",
+    "jxl-grid/std",
+    "jxl-image/std",
+    "jxl-modular/std",
+    "jxl-oxide-common/std",
+    "jxl-threadpool/std",
+    "jxl-vardct/std",
+]
+libm = ["dep:libm", "jxl-color/libm", "jxl-frame/libm", "jxl-vardct/libm"]
+

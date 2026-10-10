@@ -1,4 +1,4 @@
-use std::arch::aarch64::*;
+use core::arch::aarch64::*;
 
 use jxl_grid::SimdVector;
 
@@ -10,7 +10,7 @@ type Vector = float32x4_t;
 #[inline]
 unsafe fn weight_neon(scaled_distance: Vector, sigma: f32, step_multiplier: Vector) -> Vector {
     let neg_inv_sigma =
-        vdupq_n_f32(6.6 * (std::f32::consts::FRAC_1_SQRT_2 - 1.0) / sigma).mul(step_multiplier);
+        vdupq_n_f32(6.6 * (core::f32::consts::FRAC_1_SQRT_2 - 1.0) / sigma).mul(step_multiplier);
     let result = scaled_distance.mul(neg_inv_sigma).add(vdupq_n_f32(1.0));
     vmaxq_f32(result, Vector::zero())
 }
@@ -71,7 +71,7 @@ pub(crate) unsafe fn epf_row_aarch64_neon<const STEP: usize>(epf_row: EpfRow) {
 
         let sigma_val = sigma_row[sigma_x];
 
-        let originals: [_; 3] = std::array::from_fn(|c| unsafe {
+        let originals: [_; 3] = core::array::from_fn(|c| unsafe {
             vld1q_f32(merged_input_rows[c].get_row(3).as_ptr().add(dx))
         });
 

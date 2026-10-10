@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use jxl_bitstream::Bitstream;
 use jxl_grid::AllocTracker;
 use jxl_image::ImageMetadata;
@@ -68,9 +69,9 @@ impl Bundle<HfGlobalParams<'_, '_>> for HfGlobal {
             bitstream.read_bits(num_groups.next_power_of_two().trailing_zeros() as usize)? + 1;
 
         let hf_pass_params = HfPassParams::new(hf_block_ctx, num_hf_presets);
-        let hf_passes = std::iter::repeat_with(|| HfPass::parse(bitstream, hf_pass_params))
+        let hf_passes = core::iter::repeat_with(|| HfPass::parse(bitstream, hf_pass_params))
             .take(frame_header.passes.num_passes as usize)
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            .collect::<core::result::Result<Vec<_>, _>>()?;
 
         Ok(Self {
             dequant_matrices,

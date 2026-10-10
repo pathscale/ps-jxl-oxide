@@ -1,5 +1,8 @@
-use std::collections::VecDeque;
-use std::sync::Arc;
+use alloc::boxed::Box;
+use alloc::collections::VecDeque;
+use alloc::sync::Arc;
+use alloc::vec;
+use alloc::vec::Vec;
 
 use jxl_bitstream::{Bitstream, unpack_signed};
 use jxl_coding::Decoder;
@@ -578,7 +581,7 @@ impl MaTreeNode {
 
     fn flatten(&self, channel: u32, stream_idx: u32, prev_channels: u32) -> Vec<FlatMaTreeNode> {
         let target = self.next_decision_node(channel, stream_idx, prev_channels);
-        let mut q = std::collections::VecDeque::new();
+        let mut q = alloc::collections::VecDeque::new();
         q.push_back(target);
 
         let mut out = Vec::new();

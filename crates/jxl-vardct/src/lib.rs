@@ -3,6 +3,10 @@
 //! [dequantization matrices][DequantMatrixSet] and [HF coefficients][write_hf_coeff].
 //!
 //! Actual decoding (dequantization and rendering) of such frames is not done in this crate.
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
+
 mod dct_select;
 mod dequant;
 mod error;
@@ -10,6 +14,7 @@ mod hf_coeff;
 mod hf_metadata;
 mod hf_pass;
 mod lf;
+mod math;
 
 pub use dct_select::TransformType;
 pub use dequant::*;

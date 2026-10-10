@@ -1,3 +1,5 @@
+use alloc::vec;
+use alloc::vec::Vec;
 use jxl_bitstream::{Bitstream, unpack_signed};
 use jxl_coding::Decoder;
 use jxl_oxide_common::Bundle;
@@ -70,8 +72,8 @@ impl Bundle<&FrameHeader> for Splines {
 impl Splines {
     pub(crate) fn estimate_area(&self, base_correlation_xb: Option<(f32, f32)>) -> u64 {
         let base_correlation_xb = base_correlation_xb.unwrap_or((0.0, 1.0));
-        let corr_x = base_correlation_xb.0.abs().ceil() as u64;
-        let corr_b = base_correlation_xb.1.abs().ceil() as u64;
+        let corr_x = crate::math::ceil(base_correlation_xb.0.abs()) as u64;
+        let corr_b = crate::math::ceil(base_correlation_xb.1.abs()) as u64;
         let quant_adjust = self.quant_adjust;
         let mut total_area = 0u64;
 
@@ -158,7 +160,7 @@ impl Bundle<QuantSplineParams<'_>> for QuantSpline {
     fn parse(
         bitstream: &mut Bitstream,
         params: QuantSplineParams<'_>,
-    ) -> std::result::Result<Self, Self::Error> {
+    ) -> core::result::Result<Self, Self::Error> {
         let QuantSplineParams {
             start_point,
             num_pixels,

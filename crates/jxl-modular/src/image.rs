@@ -1,4 +1,6 @@
-use std::collections::HashMap;
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 
 use jxl_bitstream::Bitstream;
 use jxl_coding::{Decoder, DecoderRleMode, RleToken};
@@ -60,7 +62,7 @@ impl<'dest, S: Sample> TransformedGrid<'dest, S> {
         match self {
             Self::Single(leader) => {
                 let tmp = MutableSubgrid::empty();
-                let leader = std::mem::replace(leader, tmp);
+                let leader = core::mem::replace(leader, tmp);
                 *self = Self::Merged { leader, members };
             }
             Self::Merged {
@@ -84,7 +86,7 @@ impl<'dest, S: Sample> TransformedGrid<'dest, S> {
                 let members = members.drain((len - count)..).collect();
                 if len == count {
                     let tmp = MutableSubgrid::empty();
-                    let leader = std::mem::replace(leader, tmp);
+                    let leader = core::mem::replace(leader, tmp);
                     *self = Self::Single(leader);
                 }
                 members
@@ -124,7 +126,7 @@ impl<S: Sample> ModularImageDestination<S> {
             .map(|ch| {
                 AlignedGrid::with_alloc_tracker(ch.width as usize, ch.height as usize, tracker)
             })
-            .collect::<std::result::Result<_, _>>()?;
+            .collect::<core::result::Result<_, _>>()?;
 
         Ok(Self {
             header,
@@ -148,12 +150,12 @@ impl<S: Sample> ModularImageDestination<S> {
                 .meta_channels
                 .iter()
                 .map(|x| x.try_clone())
-                .collect::<std::result::Result<_, _>>()?,
+                .collect::<core::result::Result<_, _>>()?,
             image_channels: self
                 .image_channels
                 .iter()
                 .map(|x| x.try_clone())
-                .collect::<std::result::Result<_, _>>()?,
+                .collect::<core::result::Result<_, _>>()?,
         })
     }
 
@@ -208,7 +210,7 @@ impl<S: Sample> ModularImageDestination<S> {
 
     pub fn prepare_groups(
         &mut self,
-        pass_shifts: &std::collections::BTreeMap<u32, (i32, i32)>,
+        pass_shifts: &alloc::collections::BTreeMap<u32, (i32, i32)>,
     ) -> Result<TransformedGlobalModular<'_, S>> {
         assert_ne!(self.group_dim, 0);
 
@@ -479,7 +481,7 @@ impl<'dest, S: Sample> TransformedModularSubimage<'dest, S> {
             grids.push(owned);
         }
         Ok(OwnedModularSubimage {
-            channel_info: std::sync::Arc::new(self.channel_info.clone()),
+            channel_info: alloc::sync::Arc::new(self.channel_info.clone()),
             bit_depth: self.bit_depth,
             grids,
             recursive: None,
@@ -587,7 +589,7 @@ impl<S: Sample> TransformedModularSubimage<'_, S> {
 
         let wp_header = &self.header.wp_params;
         let mut predictor = PredictorState::new();
-        let mut prev_map = HashMap::new();
+        let mut prev_map = BTreeMap::new();
         for ((info, ma_tree), grid) in self
             .channel_info
             .iter()
@@ -711,7 +713,7 @@ impl<S: Sample> RecursiveModularImage<'_, S> {
 /// Private group samples and immutable channel descriptions for a returning job.
 #[derive(Debug)]
 pub struct OwnedModularSubimage<S: Sample> {
-    channel_info: std::sync::Arc<Vec<ModularChannelInfo>>,
+    channel_info: alloc::sync::Arc<Vec<ModularChannelInfo>>,
     bit_depth: u32,
     grids: Vec<AlignedGrid<S>>,
     recursive: Option<OwnedRecursiveState<S>>,

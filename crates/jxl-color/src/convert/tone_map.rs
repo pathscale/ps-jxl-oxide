@@ -1,7 +1,6 @@
-#[cfg(target_arch = "aarch64")]
-use std::arch::is_aarch64_feature_detected;
-#[cfg(target_arch = "x86_64")]
-use std::arch::is_x86_feature_detected;
+// Only the SIMD kernels call the FloatMath methods.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+use crate::math::FloatMath;
 
 use super::HdrParams;
 
@@ -223,7 +222,7 @@ unsafe fn tone_map_x86_64_avx2(
     from_luminance_range: (f32, f32),
     to_luminance_range: (f32, f32),
 ) {
-    use std::arch::x86_64::*;
+    use core::arch::x86_64::*;
 
     assert_eq!(r.len(), g.len());
     assert_eq!(g.len(), b.len());
@@ -283,7 +282,7 @@ unsafe fn tone_map_x86_64_fma(
     from_luminance_range: (f32, f32),
     to_luminance_range: (f32, f32),
 ) {
-    use std::arch::x86_64::*;
+    use core::arch::x86_64::*;
 
     assert_eq!(r.len(), g.len());
     assert_eq!(g.len(), b.len());
@@ -340,7 +339,7 @@ unsafe fn tone_map_x86_64_sse2(
     from_luminance_range: (f32, f32),
     to_luminance_range: (f32, f32),
 ) {
-    use std::arch::x86_64::*;
+    use core::arch::x86_64::*;
 
     assert_eq!(r.len(), g.len());
     assert_eq!(g.len(), b.len());
@@ -403,7 +402,7 @@ unsafe fn tone_map_aarch64_neon(
     from_luminance_range: (f32, f32),
     to_luminance_range: (f32, f32),
 ) {
-    use std::arch::aarch64::*;
+    use core::arch::aarch64::*;
 
     assert_eq!(r.len(), g.len());
     assert_eq!(g.len(), b.len());
@@ -478,7 +477,7 @@ unsafe fn tone_map_luma_x86_64_avx2(
     from_luminance_range: (f32, f32),
     to_luminance_range: (f32, f32),
 ) {
-    use std::arch::x86_64::*;
+    use core::arch::x86_64::*;
 
     let scale = intensity_target / to_luminance_range.1;
     let vscale = _mm256_set1_ps(scale);
@@ -514,7 +513,7 @@ unsafe fn tone_map_luma_x86_64_fma(
     from_luminance_range: (f32, f32),
     to_luminance_range: (f32, f32),
 ) {
-    use std::arch::x86_64::*;
+    use core::arch::x86_64::*;
 
     let scale = intensity_target / to_luminance_range.1;
     let vscale = _mm_set1_ps(scale);
@@ -548,7 +547,7 @@ unsafe fn tone_map_luma_x86_64_sse2(
     from_luminance_range: (f32, f32),
     to_luminance_range: (f32, f32),
 ) {
-    use std::arch::x86_64::*;
+    use core::arch::x86_64::*;
 
     let scale = intensity_target / to_luminance_range.1;
     let vscale = _mm_set1_ps(scale);
@@ -583,7 +582,7 @@ unsafe fn tone_map_luma_aarch64_neon(
     from_luminance_range: (f32, f32),
     to_luminance_range: (f32, f32),
 ) {
-    use std::arch::aarch64::*;
+    use core::arch::aarch64::*;
 
     let scale = intensity_target / to_luminance_range.1;
 
@@ -635,7 +634,7 @@ fn detect_peak_luminance(r: &[f32], g: &[f32], b: &[f32], luminances: [f32; 3]) 
 #[target_feature(enable = "avx2")]
 #[target_feature(enable = "fma")]
 unsafe fn detect_peak_luminance_avx2(r: &[f32], g: &[f32], b: &[f32], luminances: [f32; 3]) -> f32 {
-    use std::arch::x86_64::*;
+    use core::arch::x86_64::*;
 
     assert_eq!(r.len(), g.len());
     assert_eq!(g.len(), b.len());
@@ -688,7 +687,7 @@ unsafe fn detect_peak_luminance_avx2(r: &[f32], g: &[f32], b: &[f32], luminances
         .into_iter()
         .fold(0f32, |max, v| max.max(v));
     for ((r, g), b) in r.iter().zip(g).zip(b) {
-        let y = b.mul_add(lb, g.mul_add(lg, *r * lr));
+        let y = b.math_mul_add(lb, g.math_mul_add(lg, *r * lr));
         peak_luminance = peak_luminance.max(y);
     }
 
@@ -702,7 +701,7 @@ unsafe fn detect_peak_luminance_avx2(r: &[f32], g: &[f32], b: &[f32], luminances
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 unsafe fn detect_peak_luminance_neon(r: &[f32], g: &[f32], b: &[f32], luminances: [f32; 3]) -> f32 {
-    use std::arch::aarch64::*;
+    use core::arch::aarch64::*;
 
     assert_eq!(r.len(), g.len());
     assert_eq!(g.len(), b.len());
@@ -723,7 +722,7 @@ unsafe fn detect_peak_luminance_neon(r: &[f32], g: &[f32], b: &[f32], luminances
 
     let mut peak_luminance = vmaxvq_f32(peak_luminance);
     for ((r, g), b) in r.remainder().iter().zip(g.remainder()).zip(b.remainder()) {
-        let y = b.mul_add(lb, g.mul_add(lg, *r * lr));
+        let y = b.math_mul_add(lb, g.math_mul_add(lg, *r * lr));
         peak_luminance = peak_luminance.max(y);
     }
 

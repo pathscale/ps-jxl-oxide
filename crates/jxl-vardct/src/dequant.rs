@@ -1,3 +1,5 @@
+use alloc::vec;
+use alloc::vec::Vec;
 use jxl_bitstream::Bitstream;
 use jxl_grid::AllocTracker;
 use jxl_modular::{Modular, ModularParams};
@@ -175,7 +177,7 @@ impl DequantMatrixParams {
 
             let a = bands[scaled_index];
             let b = bands[scaled_index + 1];
-            a * (b / a).powf(frac_index)
+            a * crate::math::powf(b / a, frac_index)
         }
 
         fn mult(x: f32) -> f32 {
@@ -204,8 +206,8 @@ impl DequantMatrixParams {
                 for x in 0..width {
                     let dx = x as f32 / (width - 1) as f32;
                     let dy = y as f32 / (height - 1) as f32;
-                    let distance = (dx * dx + dy * dy).sqrt();
-                    let weight = interpolate(distance, std::f32::consts::SQRT_2 + 1e-6, &bands);
+                    let distance = crate::math::sqrt(dx * dx + dy * dy);
+                    let weight = interpolate(distance, core::f32::consts::SQRT_2 + 1e-6, &bands);
                     ret.push(weight);
                 }
             }
@@ -613,13 +615,15 @@ impl Bundle<DequantMatrixSetParams<'_, '_>> for DequantMatrixSet {
             DequantMatrixParamsEncoding::Raw {
                 denominator,
                 params,
-            } if (1.0 / denominator).round() as i32 == 2040 => params.image().map(|image| {
-                image
-                    .image_channels()
-                    .iter()
-                    .map(|channel| channel.buf().to_vec())
-                    .collect::<Vec<_>>()
-            }),
+            } if crate::math::round(1.0 / denominator) as i32 == 2040 => {
+                params.image().map(|image| {
+                    image
+                        .image_channels()
+                        .iter()
+                        .map(|channel| channel.buf().to_vec())
+                        .collect::<Vec<_>>()
+                })
+            }
             _ => None,
         };
         let jpeg_matrices = jpeg_matrices.unwrap_or_default();
@@ -632,7 +636,7 @@ impl Bundle<DequantMatrixSetParams<'_, '_>> for DequantMatrixSet {
             .iter()
             .zip(DCT_SELECT_LIST)
             .map(|(matrix, dct_select)| {
-                std::array::from_fn(|idx| {
+                core::array::from_fn(|idx| {
                     let matrix = &matrix[idx];
                     let (width, height) = dct_select.dequant_matrix_size();
                     let mut out = vec![0f32; matrix.len()];

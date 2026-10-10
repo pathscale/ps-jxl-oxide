@@ -42,14 +42,14 @@ impl From<jxl_vardct::Error> for Error {
     }
 }
 
-impl From<std::collections::TryReserveError> for Error {
-    fn from(_: std::collections::TryReserveError) -> Self {
+impl From<alloc::collections::TryReserveError> for Error {
+    fn from(_: alloc::collections::TryReserveError) -> Self {
         Self::OutOfMemory
     }
 }
 
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Bitstream(err) => write!(f, "bitstream error: {err}"),
             Self::Decoder(err) => write!(f, "entropy decoder error: {err}"),
@@ -66,8 +66,8 @@ impl std::fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl core::error::Error for Error {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             Self::Bitstream(err) => Some(err),
             Self::Decoder(err) => Some(err),
@@ -99,4 +99,4 @@ impl Error {
     }
 }
 
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = core::result::Result<T, Error>;

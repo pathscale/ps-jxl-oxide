@@ -1,3 +1,5 @@
+use alloc::vec::Vec;
+
 use jxl_image::BitDepth;
 use jxl_render::{ImageBuffer, Region};
 use private::Sealed;
@@ -161,7 +163,7 @@ impl FrameBuffer {
         assert_eq!(self.buf.len(), Self::buffer_len(self.width, self.height, N));
         // SAFETY: Arrays have size of size_of::<T> * N, alignment of T.
         // Buffer length is checked above.
-        unsafe { std::slice::from_raw_parts(self.buf.as_ptr() as *const [f32; N], grouped_len) }
+        unsafe { core::slice::from_raw_parts(self.buf.as_ptr() as *const [f32; N], grouped_len) }
     }
 
     /// Returns the mutable reference to frame buffer, grouped by pixels.
@@ -179,7 +181,7 @@ impl FrameBuffer {
         // SAFETY: Arrays have size of size_of::<T> * N, alignment of T.
         // Buffer length is checked above.
         unsafe {
-            std::slice::from_raw_parts_mut(self.buf.as_mut_ptr() as *mut [f32; N], grouped_len)
+            core::slice::from_raw_parts_mut(self.buf.as_mut_ptr() as *mut [f32; N], grouped_len)
         }
     }
 }
@@ -239,7 +241,7 @@ impl<'r> ImageStream<'r> {
             mut height,
         } = render.target_frame_region;
         if orientation >= 5 {
-            std::mem::swap(&mut width, &mut height);
+            core::mem::swap(&mut width, &mut height);
         }
 
         let fb = render.image.buffer();

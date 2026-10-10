@@ -12,24 +12,36 @@ version = "0.11.1"
 edition = "2024"
 
 [dependencies]
-tracing.workspace = true
+tracing = { version = "0.1.40", default-features = false }
+libm = { version = "0.2", default-features = false, optional = true }
 
 [dependencies.jxl-bitstream]
 version = "1.0.0"
 path = "../jxl-bitstream"
+default-features = false
 
 [dependencies.jxl-coding]
 version = "1.0.0"
 path = "../jxl-coding"
+default-features = false
 
 [dependencies.jxl-grid]
 version = "0.6.0"
 path = "../jxl-grid"
+default-features = false
 
 [dependencies.jxl-modular]
 version = "0.11.2"
 path = "../jxl-modular"
+default-features = false
 
 [dependencies.jxl-oxide-common]
 version = "1.0.0"
 path = "../jxl-oxide-common"
+default-features = false
+
+[features]
+default = ["std"]
+std = ["tracing/std", "jxl-bitstream/std", "jxl-coding/std", "jxl-grid/std", "jxl-modular/std", "jxl-oxide-common/std"]
+# Float math for builds without std.
+libm = ["dep:libm"]

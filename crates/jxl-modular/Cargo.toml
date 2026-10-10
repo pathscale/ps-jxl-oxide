@@ -12,24 +12,33 @@ version = "0.11.3"
 edition = "2024"
 
 [dependencies]
-tracing.workspace = true
+tracing = { version = "0.1.40", default-features = false }
 
 [dependencies.jxl-bitstream]
 version = "1.0.0"
 path = "../jxl-bitstream"
+default-features = false
 
 [dependencies.jxl-coding]
 version = "1.0.1"
 path = "../jxl-coding"
+default-features = false
 
 [dependencies.jxl-grid]
 version = "0.6.2"
 path = "../jxl-grid"
+default-features = false
 
 [dependencies.jxl-oxide-common]
 version = "1.0.0"
 path = "../jxl-oxide-common"
+default-features = false
 
 [dependencies.jxl-threadpool]
 version = "1.0.0"
 path = "../jxl-threadpool"
+default-features = false
+
+[features]
+default = ["std"]
+std = ["tracing/std", "jxl-bitstream/std", "jxl-coding/std", "jxl-grid/std", "jxl-oxide-common/std", "jxl-threadpool/std"]

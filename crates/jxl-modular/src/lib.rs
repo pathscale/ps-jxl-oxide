@@ -3,6 +3,10 @@
 //! A Modular image represents a set of grids (two-dimensional arrays) of integer values. Modular
 //! images are used mainly for lossless images, but lossy VarDCT images also use them to store
 //! various information, such as quantized LF images and varblock configurations.
+#![cfg_attr(not(feature = "std"), no_std)]
+use alloc::vec::Vec;
+
+extern crate alloc;
 use jxl_bitstream::Bitstream;
 use jxl_oxide_common::{Bundle, define_bundle};
 

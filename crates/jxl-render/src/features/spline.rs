@@ -1,4 +1,7 @@
-use std::ops::{Add, Mul, Sub};
+use alloc::vec::Vec;
+use core::ops::{Add, Mul, Sub};
+
+use crate::math;
 
 use jxl_frame::{
     FrameHeader,
@@ -15,9 +18,9 @@ struct Spline {
     sigma_dct: [f32; 32],
 }
 
-impl std::fmt::Display for Spline {
+impl core::fmt::Display for Spline {
     /// Formats the value using the given formatter in jxl_from_tree syntax
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         writeln!(f, "Spline")?;
         for i in self.xyb_dct.iter().chain(&[self.sigma_dct]) {
             for val in i {
@@ -154,7 +157,7 @@ impl Spline {
 
             for k in 1..4 {
                 // knot sequence with α = 0.25
-                t[k] = t[k - 1] + (p[k] - p[k - 1]).norm_squared().powf(0.25);
+                t[k] = t[k - 1] + math::powf((p[k] - p[k - 1]).norm_squared(), 0.25);
             }
 
             for step in 1..16 {
@@ -204,17 +207,17 @@ pub fn render_spline(
             ];
 
             let max_color = f32::max(0.01, values.into_iter().reduce(f32::max).unwrap());
-            let max_distance = f32::sqrt(2.0 * (f32::ln(10.0) * 3.0 + max_color)) * sigma.abs();
+            let max_distance = math::sqrt(2.0 * (math::ln(10.0) * 3.0 + max_color)) * sigma.abs();
 
-            let xbegin = i32::max(0, (arc.point.x - max_distance + 0.5).floor() as i32);
+            let xbegin = i32::max(0, math::floor(arc.point.x - max_distance + 0.5) as i32);
             let xend = i32::min(
                 (frame_header.width) as i32,
-                (arc.point.x + max_distance + 1.5).floor() as i32,
+                math::floor(arc.point.x + max_distance + 1.5) as i32,
             );
-            let ybegin = i32::max(0, (arc.point.y - max_distance + 0.5).floor() as i32);
+            let ybegin = i32::max(0, math::floor(arc.point.y - max_distance + 0.5) as i32);
             let yend = i32::min(
                 (frame_header.height) as i32,
-                (arc.point.y + max_distance + 1.5).floor() as i32,
+                math::floor(arc.point.y + max_distance + 1.5) as i32,
             );
 
             for (channel, buffer) in base_grid.as_color_floats_mut().iter_mut().enumerate() {
@@ -235,7 +238,7 @@ pub fn render_spline(
                         };
                         let dx = (x as f32) - arc.point.x;
                         let dy = (y as f32) - arc.point.y;
-                        let distance = f32::sqrt(dx * dx + dy * dy);
+                        let distance = math::sqrt(dx * dx + dy * dy);
                         const SQRT_0125: f32 = 0.353_553_38;
                         let factor = erf((0.5 * distance + SQRT_0125) * inv_sigma)
                             - erf((0.5 * distance - SQRT_0125) * inv_sigma);
@@ -274,7 +277,7 @@ impl Point {
     }
 
     fn norm(&self) -> f32 {
-        f32::sqrt(self.norm_squared())
+        math::sqrt(self.norm_squared())
     }
 }
 
@@ -305,8 +308,8 @@ impl Mul<f32> for Point {
 fn continuous_idct(dct: &[f32; 32], t: f32) -> f32 {
     let mut res = dct[0];
     for (i, &dct) in dct.iter().enumerate().skip(1) {
-        let theta = (i as f32) * (std::f32::consts::PI / 32.0) * (t + 0.5);
-        res += std::f32::consts::SQRT_2 * dct * theta.cos();
+        let theta = (i as f32) * (core::f32::consts::PI / 32.0) * (t + 0.5);
+        res += core::f32::consts::SQRT_2 * dct * math::cos(theta);
     }
     res
 }

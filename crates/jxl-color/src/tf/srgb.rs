@@ -1,3 +1,7 @@
+// Only the x86_64 AVX2 kernel calls scalar fused multiply-add.
+#[cfg(target_arch = "x86_64")]
+use crate::math::FloatMath;
+
 #[repr(align(16))]
 struct Aligned([u8; 16]);
 
@@ -20,7 +24,7 @@ pub fn linear_to_srgb(samples: &mut [f32]) {
 
     #[cfg(target_arch = "aarch64")]
     {
-        if std::arch::is_aarch64_feature_detected!("neon") {
+        if is_aarch64_feature_detected!("neon") {
             return unsafe { linear_to_srgb_aarch64_neon(samples) };
         }
     }
@@ -51,7 +55,7 @@ pub fn linear_to_srgb(samples: &mut [f32]) {
 #[target_feature(enable = "avx2")]
 #[target_feature(enable = "fma")]
 unsafe fn linear_to_srgb_avx2(samples: &mut [f32]) {
-    use std::arch::x86_64::*;
+    use core::arch::x86_64::*;
 
     let powtable_upper = _mm256_castps_si256(_mm256_broadcast_ps(
         &*(SRGB_POWTABLE_UPPER.0.as_ptr() as *const _),
@@ -104,9 +108,9 @@ unsafe fn linear_to_srgb_avx2(samples: &mut [f32]) {
         let v = s.to_bits() & 0x7fff_ffff;
         let v_adj = f32::from_bits((v | 0x3e80_0000) & 0x3eff_ffff);
         let pow = 0.059914046f32;
-        let pow = pow.mul_add(v_adj, -0.10889456);
-        let pow = pow.mul_add(v_adj, 0.107963754);
-        let pow = pow.mul_add(v_adj, 0.018092343);
+        let pow = pow.math_mul_add(v_adj, -0.10889456);
+        let pow = pow.math_mul_add(v_adj, 0.107963754);
+        let pow = pow.math_mul_add(v_adj, 0.018092343);
 
         let idx = (v >> 23).wrapping_sub(118) as usize & 0xf;
         let mul = 0x4000_0000
@@ -115,7 +119,7 @@ unsafe fn linear_to_srgb_avx2(samples: &mut [f32]) {
 
         let v = f32::from_bits(v);
         let small = v * 12.92;
-        let acc = pow.mul_add(f32::from_bits(mul), -0.055);
+        let acc = pow.math_mul_add(f32::from_bits(mul), -0.055);
 
         *s = if v <= 0.0031308 { small } else { acc }.copysign(*s);
     }
@@ -124,7 +128,7 @@ unsafe fn linear_to_srgb_avx2(samples: &mut [f32]) {
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 unsafe fn linear_to_srgb_aarch64_neon(samples: &mut [f32]) {
-    use std::arch::aarch64::*;
+    use core::arch::aarch64::*;
 
     let mut it = samples.chunks_exact_mut(4);
     for chunk in &mut it {

@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use jxl_bitstream::{Bitstream, unpack_signed};
 use jxl_image::ImageHeader;
 use jxl_oxide_common::Bundle;
@@ -49,7 +50,7 @@ pub enum PatchBlendMode {
 impl TryFrom<u32> for PatchBlendMode {
     type Error = jxl_bitstream::Error;
 
-    fn try_from(value: u32) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: u32) -> core::result::Result<Self, Self::Error> {
         use PatchBlendMode::*;
 
         Ok(match value {
@@ -114,7 +115,7 @@ impl Bundle<(&ImageHeader, &FrameHeader)> for Patches {
         }
 
         let mut total_patches = 0u32;
-        let patches = std::iter::repeat_with(|| -> Result<_> {
+        let patches = core::iter::repeat_with(|| -> Result<_> {
             let ref_idx = decoder.read_varint(bitstream, 1)?;
             if ref_idx >= 4 {
                 tracing::error!(ref_idx, "PatchRef index out of bounds");
@@ -136,7 +137,7 @@ impl Bundle<(&ImageHeader, &FrameHeader)> for Patches {
             }
 
             let mut prev_xy = None;
-            let patch_targets = std::iter::repeat_with(|| -> Result<_> {
+            let patch_targets = core::iter::repeat_with(|| -> Result<_> {
                 let (x, y) = if let Some((px, py)) = prev_xy {
                     let dx = decoder.read_varint(bitstream, 6)?;
                     let dy = decoder.read_varint(bitstream, 6)?;
@@ -159,7 +160,7 @@ impl Bundle<(&ImageHeader, &FrameHeader)> for Patches {
                 };
                 prev_xy = Some((x, y));
 
-                let blending = std::iter::repeat_with(|| -> Result<_> {
+                let blending = core::iter::repeat_with(|| -> Result<_> {
                     let raw_mode = decoder.read_varint(bitstream, 5)?;
                     let mode = PatchBlendMode::try_from(raw_mode)?;
                     let alpha_channel = if raw_mode >= 4 && alpha_channel_indices.len() >= 2 {

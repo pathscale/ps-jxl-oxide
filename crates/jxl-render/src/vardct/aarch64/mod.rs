@@ -1,5 +1,3 @@
-use std::arch::is_aarch64_feature_detected;
-
 use jxl_grid::AllocTracker;
 use jxl_modular::ChannelShift;
 

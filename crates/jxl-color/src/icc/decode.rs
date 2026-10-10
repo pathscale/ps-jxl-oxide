@@ -1,5 +1,4 @@
-use std::io::Cursor;
-use std::io::prelude::*;
+use alloc::{vec, vec::Vec};
 
 use jxl_bitstream::Bitstream;
 
@@ -36,10 +35,10 @@ pub fn read_icc(bitstream: &mut Bitstream) -> Result<Vec<u8>> {
         b1 = *b;
     }
 
-    let mut tmp_cursor = Cursor::new(&*encoded_icc);
+    let mut tmp_cursor = &*encoded_icc;
     let output_size = varint(&mut tmp_cursor)?;
     let commands_size = varint(&mut tmp_cursor)?;
-    let stream_offset = tmp_cursor.position();
+    let stream_offset = (encoded_icc.len() - tmp_cursor.len()) as u64;
     tracing::trace!(
         enc_size,
         output_size,
@@ -104,14 +103,19 @@ fn get_icc_ctx(idx: usize, b1: u8, b2: u8) -> u32 {
     1 + p1 + 8 * p2
 }
 
-fn varint(stream: &mut Cursor<&[u8]>) -> Result<u64> {
+fn read_byte(stream: &mut &[u8]) -> Result<u8> {
+    let (&byte, rest) = stream
+        .split_first()
+        .ok_or(Error::InvalidIccStream("stream is too short"))?;
+    *stream = rest;
+    Ok(byte)
+}
+
+fn varint(stream: &mut &[u8]) -> Result<u64> {
     let mut value = 0u64;
     let mut shift = 0;
-    let mut b = 0;
     while shift < 63 {
-        stream
-            .read_exact(std::slice::from_mut(&mut b))
-            .map_err(|_| Error::InvalidIccStream("stream is too short"))?;
+        let b = read_byte(stream)?;
         value |= ((b & 0x7f) as u64) << shift;
         if b & 0x80 == 0 {
             break;
@@ -189,7 +193,7 @@ fn shuffle4(bytes: &[u8]) -> Vec<u8> {
 
 /// Decodes the given ICC profile stream.
 pub fn decode_icc(stream: &[u8]) -> Result<Vec<u8>> {
-    use std::num::Wrapping;
+    use core::num::Wrapping;
 
     const COMMON_TAGS: [&[u8]; 19] = [
         b"rTRC", b"rXYZ", b"cprt", b"wtpt", b"bkpt", b"rXYZ", b"gXYZ", b"bXYZ", b"kXYZ", b"rTRC",
@@ -200,10 +204,10 @@ pub fn decode_icc(stream: &[u8]) -> Result<Vec<u8>> {
         b"XYZ ", b"desc", b"text", b"mluc", b"para", b"curv", b"sf32", b"gbd ",
     ];
 
-    let mut tmp_cursor = Cursor::new(stream);
+    let mut tmp_cursor = stream;
     let output_size = varint(&mut tmp_cursor)?;
     let commands_size = varint(&mut tmp_cursor)?;
-    let stream_offset = tmp_cursor.position();
+    let stream_offset = (stream.len() - tmp_cursor.len()) as u64;
     if stream_offset + commands_size > stream.len() as u64 {
         return Err(Error::InvalidIccStream("invalid commands_size"));
     }
@@ -218,7 +222,7 @@ pub fn decode_icc(stream: &[u8]) -> Result<Vec<u8>> {
         return Err(Error::InvalidIccStream("invalid output_size"));
     }
     let (header_data, mut data) = data.split_at(header_size);
-    let mut commands_stream = Cursor::new(commands);
+    let mut commands_stream = commands;
     let mut out = Vec::with_capacity(output_size as usize);
 
     // Header
@@ -243,13 +247,9 @@ pub fn decode_icc(stream: &[u8]) -> Result<Vec<u8>> {
         let mut prev_tagsize = 0u32;
 
         loop {
-            let mut command = 0u8;
-            if commands_stream
-                .read_exact(std::slice::from_mut(&mut command))
-                .is_err()
-            {
+            let Ok(command) = read_byte(&mut commands_stream) else {
                 return Ok(out);
-            }
+            };
             let tagcode = command & 63;
             let tag = match tagcode {
                 0 => break,
@@ -304,11 +304,7 @@ pub fn decode_icc(stream: &[u8]) -> Result<Vec<u8>> {
     }
 
     // Main
-    let mut command = 0u8;
-    while commands_stream
-        .read_exact(std::slice::from_mut(&mut command))
-        .is_ok()
-    {
+    while let Ok(command) = read_byte(&mut commands_stream) {
         match command {
             1 => {
                 let num = varint(&mut commands_stream)? as usize;
@@ -334,10 +330,7 @@ pub fn decode_icc(stream: &[u8]) -> Result<Vec<u8>> {
                 out.extend_from_slice(&bytes);
             }
             4 => {
-                let mut flags = 0u8;
-                commands_stream
-                    .read_exact(std::slice::from_mut(&mut flags))
-                    .map_err(|_| Error::InvalidIccStream("stream is too short"))?;
+                let flags = read_byte(&mut commands_stream)?;
                 let width = ((flags & 3) + 1) as usize;
                 let order = (flags >> 2) & 3;
                 if width == 3 || order == 3 {

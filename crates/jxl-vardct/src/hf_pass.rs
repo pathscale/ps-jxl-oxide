@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use jxl_bitstream::{Bitstream, U};
 use jxl_coding::Decoder;
 use jxl_oxide_common::Bundle;
@@ -42,7 +43,7 @@ impl Bundle<HfPassParams<'_>> for HfPass {
             .transpose()?;
 
         let mut permutation: [_; 13] =
-            std::array::from_fn(|_| [Vec::new(), Vec::new(), Vec::new()]);
+            core::array::from_fn(|_| [Vec::new(), Vec::new(), Vec::new()]);
         if let Some(decoder) = &mut decoder {
             let it = permutation.iter_mut().zip(BLOCK_SIZES).enumerate();
             for (idx, (permutation, (bw, bh))) in it {

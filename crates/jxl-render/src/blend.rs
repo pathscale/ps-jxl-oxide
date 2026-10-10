@@ -36,8 +36,8 @@ struct BlendAlpha<'a> {
     premultiplied: bool,
 }
 
-impl std::fmt::Debug for BlendAlpha<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for BlendAlpha<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("BlendAlpha")
             .field("clamp", &self.clamp)
             .field("swapped", &self.swapped)
@@ -190,7 +190,7 @@ pub(crate) fn blend(
     output_grid.set_ct_done(new_grid.ct_done());
 
     let has_extra = !header.ec_blending_info.is_empty();
-    for (idx, blending_info) in std::iter::repeat_n(&header.blending_info, color_channels)
+    for (idx, blending_info) in core::iter::repeat_n(&header.blending_info, color_channels)
         .chain(&header.ec_blending_info)
         .enumerate()
     {
@@ -371,7 +371,7 @@ pub fn patch(
     let color_channels = base_grid.color_channels();
     assert_eq!(patch_ref_grid.color_channels(), color_channels);
     for target in &patch_ref.patch_targets {
-        for (idx, blending_info) in std::iter::repeat_n(&target.blending[0], color_channels)
+        for (idx, blending_info) in core::iter::repeat_n(&target.blending[0], color_channels)
             .chain(&target.blending[1..])
             .enumerate()
         {
@@ -658,7 +658,7 @@ fn blend_single(
                     let mut base = base_row[base_buf_x];
                     let mut new = new_row[new_buf_x];
                     if *swapped {
-                        std::mem::swap(&mut base, &mut new);
+                        core::mem::swap(&mut base, &mut new);
                     }
                     if *clamp {
                         new = new.clamp(0.0, 1.0);

@@ -1,4 +1,4 @@
-use std::arch::wasm32::*;
+use core::arch::wasm32::*;
 
 use jxl_grid::SimdVector;
 
@@ -12,7 +12,7 @@ unsafe fn weight_wasm32_simd128(
     sigma: f32,
     step_multiplier: Vector,
 ) -> Vector {
-    let neg_inv_sigma = Vector::splat_f32(6.6 * (std::f32::consts::FRAC_1_SQRT_2 - 1.0) / sigma)
+    let neg_inv_sigma = Vector::splat_f32(6.6 * (core::f32::consts::FRAC_1_SQRT_2 - 1.0) / sigma)
         .mul(step_multiplier);
     let result = scaled_distance
         .mul(neg_inv_sigma)
@@ -77,7 +77,7 @@ pub(crate) unsafe fn epf_row_wasm32_simd128<const STEP: usize>(epf_row: EpfRow) 
 
         let sigma_val = sigma_row[sigma_x];
 
-        let originals: [_; 3] = std::array::from_fn(|c| unsafe {
+        let originals: [_; 3] = core::array::from_fn(|c| unsafe {
             Vector::load(merged_input_rows[c].get_row(3).as_ptr().add(dx))
         });
 

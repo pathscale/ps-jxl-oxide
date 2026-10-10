@@ -1,3 +1,5 @@
+use alloc::vec::Vec;
+
 use crate::{
     ColourSpace, Customxy, EnumColourEncoding, Error, Primaries, RenderingIntent, Result,
     TransferFunction, WhitePoint,
@@ -70,7 +72,7 @@ impl IccProfileInfo {
 
         let xyz_rgb = self.xyz_rgb?;
 
-        let xyz_rgb_mat: [f32; 9] = std::array::from_fn(|idx| {
+        let xyz_rgb_mat: [f32; 9] = core::array::from_fn(|idx| {
             let v = xyz_rgb[idx % 3][idx / 3];
             v as f32 / 65536f32
         });
@@ -331,7 +333,7 @@ pub fn detect_profile_info(profile: &[u8]) -> Result<IccProfileInfo> {
                                     ));
                                 }
 
-                                let [gamma]: [i32; 1] = std::array::from_fn(|idx| {
+                                let [gamma]: [i32; 1] = core::array::from_fn(|idx| {
                                     let mut bytes = [0u8; 4];
                                     bytes.copy_from_slice(&data[12 + 4 * idx..][..4]);
                                     i32::from_be_bytes(bytes)
@@ -349,7 +351,7 @@ pub fn detect_profile_info(profile: &[u8]) -> Result<IccProfileInfo> {
                                     ));
                                 }
 
-                                let params: [i32; 5] = std::array::from_fn(|idx| {
+                                let params: [i32; 5] = core::array::from_fn(|idx| {
                                     let mut bytes = [0u8; 4];
                                     bytes.copy_from_slice(&data[12 + 4 * idx..][..4]);
                                     i32::from_be_bytes(bytes)
@@ -422,7 +424,7 @@ pub fn detect_profile_info(profile: &[u8]) -> Result<IccProfileInfo> {
                     return Err(Error::IccParseFailure("invalid chad tag"));
                 }
 
-                let mat = std::array::from_fn(|idx| {
+                let mat = core::array::from_fn(|idx| {
                     let mut bytes = [0u8; 4];
                     bytes.copy_from_slice(&data[8 + 4 * idx..][..4]);
                     i32::from_be_bytes(bytes)
@@ -564,7 +566,7 @@ pub fn icc_tf(profile: &[u8]) -> Option<TransferFunction> {
     parse_icc(profile).ok().map(|profile| profile.tf)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::parse_icc;
     use crate::*;

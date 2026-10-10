@@ -1,4 +1,4 @@
-use std::arch::x86_64::*;
+use core::arch::x86_64::*;
 
 use jxl_grid::SimdVector;
 
@@ -9,7 +9,7 @@ type Vector = __m128;
 #[inline]
 #[target_feature(enable = "sse4.1")]
 unsafe fn weight_sse41(scaled_distance: Vector, sigma: f32, step_multiplier: Vector) -> Vector {
-    let neg_inv_sigma = Vector::splat_f32(6.6 * (std::f32::consts::FRAC_1_SQRT_2 - 1.0) / sigma)
+    let neg_inv_sigma = Vector::splat_f32(6.6 * (core::f32::consts::FRAC_1_SQRT_2 - 1.0) / sigma)
         .mul(step_multiplier);
     let result = scaled_distance.mul(neg_inv_sigma).add(_mm_set1_ps(1.0));
     _mm_max_ps(result, Vector::zero())
@@ -81,7 +81,7 @@ pub(crate) unsafe fn epf_row_x86_64_sse41<const STEP: usize>(epf_row: EpfRow) {
 
         let sigma_val = sigma_row[sigma_x];
 
-        let originals: [_; 3] = std::array::from_fn(|c| unsafe {
+        let originals: [_; 3] = core::array::from_fn(|c| unsafe {
             _mm_loadu_ps(merged_input_rows[c].get_row(3).as_ptr().add(dx))
         });
 

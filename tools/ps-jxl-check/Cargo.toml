@@ -9,7 +9,7 @@ autotests = false
 autobenches = false
 
 [dependencies]
-jxl-oxide = { path = "../../crates/jxl-oxide", default-features = false }
+jxl-oxide = { path = "../../crates/jxl-oxide" }
 nagoya = { version = "0.1.13", optional = true }
 
 [features]

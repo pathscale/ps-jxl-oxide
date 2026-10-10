@@ -1,3 +1,5 @@
+use alloc::boxed::Box;
+
 use crate::RenderingIntent;
 
 /// Color management system that handles ICCv4 profiles.
@@ -11,7 +13,7 @@ pub trait ColorManagementSystem {
         from_icc: &[u8],
         to_icc: &[u8],
         intent: RenderingIntent,
-    ) -> Result<Box<dyn PreparedTransform>, Box<dyn std::error::Error + Send + Sync + 'static>>;
+    ) -> Result<Box<dyn PreparedTransform>, Box<dyn core::error::Error + Send + Sync + 'static>>;
 
     /// Returns whether the CMS supports linear transfer function.
     ///
@@ -39,7 +41,7 @@ pub trait PreparedTransform: Send + Sync {
     fn transform(
         &self,
         channels: &mut [&mut [f32]],
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>;
+    ) -> Result<(), Box<dyn core::error::Error + Send + Sync + 'static>>;
 }
 
 /// "Null" color management system that fails on every operation.
@@ -51,7 +53,7 @@ impl ColorManagementSystem for NullCms {
         _: &[u8],
         _: &[u8],
         _: RenderingIntent,
-    ) -> Result<Box<dyn PreparedTransform>, Box<dyn std::error::Error + Send + Sync + 'static>>
+    ) -> Result<Box<dyn PreparedTransform>, Box<dyn core::error::Error + Send + Sync + 'static>>
     {
         Err(Box::new(crate::Error::CmsNotAvailable))
     }

@@ -1,8 +1,21 @@
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", feature = "std"))]
 use std::arch::is_aarch64_feature_detected;
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
 use std::arch::is_x86_feature_detected;
-use std::num::Wrapping;
+// Without std there is no runtime detection; use the features the target was compiled with.
+#[cfg(all(target_arch = "aarch64", not(feature = "std")))]
+macro_rules! is_aarch64_feature_detected {
+    ($feature:tt) => {
+        cfg!(target_feature = $feature)
+    };
+}
+#[cfg(all(target_arch = "x86_64", not(feature = "std")))]
+macro_rules! is_x86_feature_detected {
+    ($feature:tt) => {
+        cfg!(target_feature = $feature)
+    };
+}
+use core::num::Wrapping;
 
 use jxl_grid::MutableSubgrid;
 

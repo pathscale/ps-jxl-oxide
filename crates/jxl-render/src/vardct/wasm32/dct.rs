@@ -1,7 +1,7 @@
 use jxl_grid::{MutableSubgrid, SimdVector};
 
 use super::super::dct_common::{self, DctDirection};
-use std::arch::wasm32::*;
+use core::arch::wasm32::*;
 
 const LANE_SIZE: usize = 4;
 type Lane = v128;
@@ -68,14 +68,14 @@ unsafe fn dct4_vec_forward(v: Lane) -> Lane {
     let a = i32x4_shuffle::<0, 3, 1, 2>(addsub, addsub);
     let mul_a = Lane::set([
         0.25,
-        (std::f32::consts::FRAC_1_SQRT_2 / 2.0 + 0.25) * SEC0,
+        (core::f32::consts::FRAC_1_SQRT_2 / 2.0 + 0.25) * SEC0,
         -0.25,
         -0.25 * SEC1,
     ]);
     let b = i32x4_shuffle::<1, 2, 0, 3>(addsub, addsub);
     let mul_b = Lane::set([
         0.25,
-        (std::f32::consts::FRAC_1_SQRT_2 / 2.0 - 0.25) * SEC1,
+        (core::f32::consts::FRAC_1_SQRT_2 / 2.0 - 0.25) * SEC1,
         0.25,
         0.25 * SEC0,
     ]);
@@ -88,8 +88,8 @@ pub(crate) unsafe fn dct4_vec_inverse(v: Lane) -> Lane {
     const SEC1: f32 = 1.306563;
 
     let v_flip = i32x4_shuffle::<2, 3, 0, 1>(v, v);
-    let mul_a = Lane::set([1.0, (std::f32::consts::SQRT_2 + 1.0) * SEC0, -1.0, -SEC1]);
-    let mul_b = Lane::set([1.0, SEC0, 1.0, (std::f32::consts::SQRT_2 - 1.0) * SEC1]);
+    let mul_a = Lane::set([1.0, (core::f32::consts::SQRT_2 + 1.0) * SEC0, -1.0, -SEC1]);
+    let mul_b = Lane::set([1.0, SEC0, 1.0, (core::f32::consts::SQRT_2 - 1.0) * SEC1]);
     let tmp = v.muladd(mul_a, v_flip.mul(mul_b));
 
     let tmp_neg = f32x4_neg(tmp);
@@ -113,7 +113,7 @@ unsafe fn dct8_vec_forward(vl: Lane, vr: Lane) -> (Lane, Lane) {
     let output0 = dct4_vec_forward(input0);
     let output1 = dct4_vec_forward(input1);
     let output1_shifted = i32x4_shuffle::<1, 2, 3, 4>(output1, Lane::zero());
-    let output1_mul = Lane::set([std::f32::consts::SQRT_2, 1.0, 1.0, 1.0]);
+    let output1_mul = Lane::set([core::f32::consts::SQRT_2, 1.0, 1.0, 1.0]);
     let output1 = output1.muladd(output1_mul, output1_shifted);
     (
         i32x4_shuffle::<0, 4, 1, 5>(output0, output1),
@@ -133,7 +133,7 @@ pub(crate) unsafe fn dct8_vec_inverse(vl: Lane, vr: Lane) -> (Lane, Lane) {
     let input0 = i32x4_shuffle::<0, 2, 4, 6>(vl, vr);
     let input1 = i32x4_shuffle::<1, 3, 5, 7>(vl, vr);
     let input1_shifted = i32x4_shuffle::<3, 4, 5, 6>(Lane::zero(), input1);
-    let input1_mul = Lane::set([std::f32::consts::SQRT_2, 1.0, 1.0, 1.0]);
+    let input1_mul = Lane::set([core::f32::consts::SQRT_2, 1.0, 1.0, 1.0]);
     let input1 = input1.muladd(input1_mul, input1_shifted);
     let output0 = dct4_vec_inverse(input0);
     let output1 = dct4_vec_inverse(input1);
@@ -228,7 +228,7 @@ unsafe fn dct4_forward(input: [Lane; 4]) -> [Lane; 4] {
 
     [
         sum03.add(sum12).mul(Lane::splat_f32(0.25)),
-        out0.mul(Lane::splat_f32(std::f32::consts::SQRT_2))
+        out0.mul(Lane::splat_f32(core::f32::consts::SQRT_2))
             .add(out1),
         sum03.sub(sum12).mul(Lane::splat_f32(0.25)),
         out1,
@@ -240,7 +240,7 @@ pub(crate) unsafe fn dct4_inverse(input: [Lane; 4]) -> [Lane; 4] {
     let sec0 = Lane::splat_f32(0.5411961);
     let sec1 = Lane::splat_f32(1.306563);
 
-    let tmp0 = input[1].mul(Lane::splat_f32(std::f32::consts::SQRT_2));
+    let tmp0 = input[1].mul(Lane::splat_f32(core::f32::consts::SQRT_2));
     let tmp1 = input[1].add(input[3]);
     let out0 = tmp0.add(tmp1).mul(sec0);
     let out1 = tmp0.sub(tmp1).mul(sec1);
@@ -286,7 +286,7 @@ unsafe fn dct8_forward(io: &mut MutableSubgrid<'_, Lane>) {
         *io.get_mut(0, idx * 2) = v;
     }
     let mut output1 = dct4_forward(input1);
-    output1[0] = output1[0].mul(Lane::splat_f32(std::f32::consts::SQRT_2));
+    output1[0] = output1[0].mul(Lane::splat_f32(core::f32::consts::SQRT_2));
     for idx in 0..3 {
         *io.get_mut(0, idx * 2 + 1) = output1[idx].add(output1[idx + 1]);
     }
@@ -300,7 +300,7 @@ unsafe fn dct8_inverse(io: &mut MutableSubgrid<'_, Lane>) {
 
     let input0 = [io.get(0, 0), io.get(0, 2), io.get(0, 4), io.get(0, 6)];
     let input1 = [
-        io.get(0, 1).mul(Lane::splat_f32(std::f32::consts::SQRT_2)),
+        io.get(0, 1).mul(Lane::splat_f32(core::f32::consts::SQRT_2)),
         io.get(0, 3).add(io.get(0, 1)),
         io.get(0, 5).add(io.get(0, 3)),
         io.get(0, 7).add(io.get(0, 5)),
@@ -359,7 +359,7 @@ unsafe fn dct(io: &mut [Lane], scratch: &mut [Lane], direction: DctDirection) {
 
     assert!(n.is_power_of_two());
 
-    let sqrt2 = Lane::splat_f32(std::f32::consts::SQRT_2);
+    let sqrt2 = Lane::splat_f32(core::f32::consts::SQRT_2);
     if direction == DctDirection::Forward {
         let (input0, input1) = scratch.split_at_mut(n / 2);
         for (idx, &sec) in dct_common::sec_half(n).iter().enumerate() {

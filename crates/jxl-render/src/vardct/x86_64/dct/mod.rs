@@ -1,4 +1,4 @@
-use std::arch::x86_64::*;
+use core::arch::x86_64::*;
 
 use jxl_grid::{MutableSubgrid, SimdVector};
 
@@ -58,14 +58,14 @@ unsafe fn dct4_vec_forward(v: Lane) -> Lane {
     let a = unsafe { _mm_shuffle_ps::<0b10011100>(addsub, addsub) };
     let mul_a = Lane::set([
         0.25,
-        (std::f32::consts::FRAC_1_SQRT_2 / 2.0 + 0.25) * SEC0,
+        (core::f32::consts::FRAC_1_SQRT_2 / 2.0 + 0.25) * SEC0,
         -0.25,
         -0.25 * SEC1,
     ]);
     let b = unsafe { _mm_shuffle_ps::<0b11001001>(addsub, addsub) };
     let mul_b = Lane::set([
         0.25,
-        (std::f32::consts::FRAC_1_SQRT_2 / 2.0 - 0.25) * SEC1,
+        (core::f32::consts::FRAC_1_SQRT_2 / 2.0 - 0.25) * SEC1,
         0.25,
         0.25 * SEC0,
     ]);
@@ -78,8 +78,8 @@ pub(crate) unsafe fn dct4_vec_inverse(v: Lane) -> Lane {
     const SEC1: f32 = 1.306563;
 
     let v_flip = unsafe { _mm_shuffle_ps::<0b01001110>(v, v) };
-    let mul_a = Lane::set([1.0, (std::f32::consts::SQRT_2 + 1.0) * SEC0, -1.0, -SEC1]);
-    let mul_b = Lane::set([1.0, SEC0, 1.0, (std::f32::consts::SQRT_2 - 1.0) * SEC1]);
+    let mul_a = Lane::set([1.0, (core::f32::consts::SQRT_2 + 1.0) * SEC0, -1.0, -SEC1]);
+    let mul_b = Lane::set([1.0, SEC0, 1.0, (core::f32::consts::SQRT_2 - 1.0) * SEC1]);
     let tmp = v.muladd(mul_a, v_flip.mul(mul_b));
 
     let tmp_a = unsafe { _mm_shuffle_ps::<0b00101000>(tmp, tmp) };
@@ -104,7 +104,7 @@ unsafe fn dct8_vec_forward(vl: Lane, vr: Lane) -> (Lane, Lane) {
     let output1 = dct4_vec_forward(input1);
     let output1_shifted =
         unsafe { _mm_castsi128_ps(_mm_srli_si128::<4>(_mm_castps_si128(output1))) };
-    let output1_mul = Lane::set([std::f32::consts::SQRT_2, 1.0, 1.0, 1.0]);
+    let output1_mul = Lane::set([core::f32::consts::SQRT_2, 1.0, 1.0, 1.0]);
     let output1 = output1.muladd(output1_mul, output1_shifted);
     (unsafe { _mm_unpacklo_ps(output0, output1) }, unsafe {
         _mm_unpackhi_ps(output0, output1)
@@ -123,7 +123,7 @@ pub(crate) unsafe fn dct8_vec_inverse(vl: Lane, vr: Lane) -> (Lane, Lane) {
     let input0 = unsafe { _mm_shuffle_ps::<0b10001000>(vl, vr) };
     let input1 = unsafe { _mm_shuffle_ps::<0b11011101>(vl, vr) };
     let input1_shifted = unsafe { _mm_castsi128_ps(_mm_slli_si128::<4>(_mm_castps_si128(input1))) };
-    let input1_mul = Lane::set([std::f32::consts::SQRT_2, 1.0, 1.0, 1.0]);
+    let input1_mul = Lane::set([core::f32::consts::SQRT_2, 1.0, 1.0, 1.0]);
     let input1 = input1.muladd(input1_mul, input1_shifted);
     let output0 = dct4_vec_inverse(input0);
     let output1 = dct4_vec_inverse(input1);
@@ -209,7 +209,7 @@ unsafe fn dct4_forward(input: [Lane; 4]) -> [Lane; 4] {
     let sec0 = Lane::splat_f32(0.5411961 / 4.0);
     let sec1 = Lane::splat_f32(1.306563 / 4.0);
     let quarter = Lane::splat_f32(0.25);
-    let sqrt2 = Lane::splat_f32(std::f32::consts::SQRT_2);
+    let sqrt2 = Lane::splat_f32(core::f32::consts::SQRT_2);
 
     let sum03 = input[0].add(input[3]);
     let sum12 = input[1].add(input[2]);
@@ -230,7 +230,7 @@ unsafe fn dct4_forward(input: [Lane; 4]) -> [Lane; 4] {
 pub(crate) unsafe fn dct4_inverse(input: [Lane; 4]) -> [Lane; 4] {
     let sec0 = Lane::splat_f32(0.5411961);
     let sec1 = Lane::splat_f32(1.306563);
-    let sqrt2 = Lane::splat_f32(std::f32::consts::SQRT_2);
+    let sqrt2 = Lane::splat_f32(core::f32::consts::SQRT_2);
 
     let tmp0 = input[1].mul(sqrt2);
     let tmp1 = input[1].add(input[3]);
@@ -251,7 +251,7 @@ pub(crate) unsafe fn dct4_inverse(input: [Lane; 4]) -> [Lane; 4] {
 unsafe fn dct8_forward(io: &mut MutableSubgrid<'_, Lane>) {
     assert!(io.height() == 8);
     let half = Lane::splat_f32(0.5);
-    let sqrt2 = Lane::splat_f32(std::f32::consts::SQRT_2);
+    let sqrt2 = Lane::splat_f32(core::f32::consts::SQRT_2);
     let sec = dct_common::sec_half_small(8);
 
     let input0 = [
@@ -289,7 +289,7 @@ unsafe fn dct8_forward(io: &mut MutableSubgrid<'_, Lane>) {
 #[inline]
 unsafe fn dct8_inverse(io: &mut MutableSubgrid<'_, Lane>) {
     assert!(io.height() == 8);
-    let sqrt2 = Lane::splat_f32(std::f32::consts::SQRT_2);
+    let sqrt2 = Lane::splat_f32(core::f32::consts::SQRT_2);
     let sec = dct_common::sec_half_small(8);
 
     let input0 = [io.get(0, 0), io.get(0, 2), io.get(0, 4), io.get(0, 6)];
@@ -342,7 +342,7 @@ unsafe fn dct(io: &mut [Lane], scratch: &mut [Lane], direction: DctDirection) {
         return;
     }
 
-    let sqrt2 = Lane::splat_f32(std::f32::consts::SQRT_2);
+    let sqrt2 = Lane::splat_f32(core::f32::consts::SQRT_2);
     if n == 8 {
         if direction == DctDirection::Forward {
             dct8_forward(&mut MutableSubgrid::from_buf(io, 1, 8, 1));

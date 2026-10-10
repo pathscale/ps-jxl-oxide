@@ -1,4 +1,5 @@
 use crate::Result;
+use alloc::vec;
 use jxl_bitstream::{Bitstream, U};
 use jxl_image::{BitDepth, Extensions, ImageHeader, SizeHeader};
 use jxl_oxide_common::{Bundle, Name, define_bundle};

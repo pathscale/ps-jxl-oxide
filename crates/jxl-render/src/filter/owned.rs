@@ -1,3 +1,5 @@
+use alloc::vec::Vec;
+
 use jxl_grid::{AlignedGrid, AllocTracker};
 
 use crate::{ImageBuffer, ImageWithRegion, Region, Result};
@@ -28,8 +30,8 @@ impl FilterImage {
         let region = image.regions_and_shifts()[0].0;
         assert!(region.contains(filter_region));
         let tracker = image.alloc_tracker().cloned();
-        let planes = std::array::from_fn(|channel| {
-            let buffer = std::mem::replace(
+        let planes = core::array::from_fn(|channel| {
+            let buffer = core::mem::replace(
                 &mut image.buffer_mut()[channel],
                 ImageBuffer::F32(AlignedGrid::empty()),
             );

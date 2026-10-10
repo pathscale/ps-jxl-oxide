@@ -1,11 +1,13 @@
 #![allow(clippy::excessive_precision)]
 
+use crate::math::FloatMath;
+
 const POW2F_NUMER_COEFFS: [f32; 3] = [1.01749063e1, 4.88687798e1, 9.85506591e1];
 const POW2F_DENOM_COEFFS: [f32; 4] = [2.10242958e-1, -2.22328856e-2, -1.94414990e1, 9.85506633e1];
 
 #[inline]
 fn fast_pow2f_generic(x: f32) -> f32 {
-    let x_floor = x.floor();
+    let x_floor = x.math_floor();
     let exp = f32::from_bits(((x_floor as i32 + 127) as u32) << 23);
     let frac = x - x_floor;
 
@@ -23,11 +25,19 @@ fn fast_pow2f_generic(x: f32) -> f32 {
 
 #[cfg(target_arch = "x86_64")]
 #[inline]
-fn fast_pow2f_x86_64_sse2(x: std::arch::x86_64::__m128) -> std::arch::x86_64::__m128 {
-    use std::arch::x86_64::*;
+fn fast_pow2f_x86_64_sse2(x: core::arch::x86_64::__m128) -> core::arch::x86_64::__m128 {
+    use core::arch::x86_64::*;
 
     unsafe {
+        #[cfg(any(feature = "std", target_feature = "sse4.1"))]
         let x_floor = _mm_floor_ps(x);
+        #[cfg(not(any(feature = "std", target_feature = "sse4.1")))]
+        let x_floor = {
+            let mut lanes = [0f32; 4];
+            _mm_storeu_ps(lanes.as_mut_ptr(), x);
+            let lanes = lanes.map(|v| v.math_floor());
+            _mm_loadu_ps(lanes.as_ptr())
+        };
         let exp = _mm_add_epi32(_mm_cvtps_epi32(x_floor), _mm_set1_epi32(127));
         let exp = _mm_castsi128_ps(_mm_slli_epi32::<23>(exp));
         let frac = _mm_sub_ps(x, x_floor);
@@ -51,8 +61,8 @@ fn fast_pow2f_x86_64_sse2(x: std::arch::x86_64::__m128) -> std::arch::x86_64::__
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "fma")]
 #[inline]
-unsafe fn fast_pow2f_x86_64_fma(x: std::arch::x86_64::__m128) -> std::arch::x86_64::__m128 {
-    use std::arch::x86_64::*;
+unsafe fn fast_pow2f_x86_64_fma(x: core::arch::x86_64::__m128) -> core::arch::x86_64::__m128 {
+    use core::arch::x86_64::*;
 
     let x_floor = _mm_floor_ps(x);
     let exp = _mm_add_epi32(_mm_cvtps_epi32(x_floor), _mm_set1_epi32(127));
@@ -79,8 +89,8 @@ unsafe fn fast_pow2f_x86_64_fma(x: std::arch::x86_64::__m128) -> std::arch::x86_
 #[target_feature(enable = "avx2")]
 #[target_feature(enable = "fma")]
 #[inline]
-unsafe fn fast_pow2f_x86_64_avx2(x: std::arch::x86_64::__m256) -> std::arch::x86_64::__m256 {
-    use std::arch::x86_64::*;
+unsafe fn fast_pow2f_x86_64_avx2(x: core::arch::x86_64::__m256) -> core::arch::x86_64::__m256 {
+    use core::arch::x86_64::*;
 
     let x_floor = _mm256_floor_ps(x);
     let exp = _mm256_add_epi32(_mm256_cvtps_epi32(x_floor), _mm256_set1_epi32(127));
@@ -107,9 +117,9 @@ unsafe fn fast_pow2f_x86_64_avx2(x: std::arch::x86_64::__m256) -> std::arch::x86
 #[target_feature(enable = "neon")]
 #[inline]
 unsafe fn fast_pow2f_aarch64_neon(
-    x: std::arch::aarch64::float32x4_t,
-) -> std::arch::aarch64::float32x4_t {
-    use std::arch::aarch64::*;
+    x: core::arch::aarch64::float32x4_t,
+) -> core::arch::aarch64::float32x4_t {
+    use core::arch::aarch64::*;
 
     let x_floor = vrndmq_f32(x);
     let exp = vaddq_s32(vcvtq_s32_f32(x_floor), vdupq_n_s32(127));
@@ -157,8 +167,8 @@ fn fast_log2f_generic(x: f32) -> f32 {
 
 #[cfg(target_arch = "x86_64")]
 #[inline]
-fn fast_log2f_x86_64_sse2(x: std::arch::x86_64::__m128) -> std::arch::x86_64::__m128 {
-    use std::arch::x86_64::*;
+fn fast_log2f_x86_64_sse2(x: core::arch::x86_64::__m128) -> core::arch::x86_64::__m128 {
+    use core::arch::x86_64::*;
 
     unsafe {
         let x_bits = _mm_castps_si128(x);
@@ -178,8 +188,8 @@ fn fast_log2f_x86_64_sse2(x: std::arch::x86_64::__m128) -> std::arch::x86_64::__
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "fma")]
 #[inline]
-unsafe fn fast_log2f_x86_64_fma(x: std::arch::x86_64::__m128) -> std::arch::x86_64::__m128 {
-    use std::arch::x86_64::*;
+unsafe fn fast_log2f_x86_64_fma(x: core::arch::x86_64::__m128) -> core::arch::x86_64::__m128 {
+    use core::arch::x86_64::*;
 
     let x_bits = _mm_castps_si128(x);
     let exp_bits = _mm_sub_epi32(x_bits, _mm_set1_epi32(0x3f2aaaab));
@@ -198,8 +208,8 @@ unsafe fn fast_log2f_x86_64_fma(x: std::arch::x86_64::__m128) -> std::arch::x86_
 #[target_feature(enable = "avx2")]
 #[target_feature(enable = "fma")]
 #[inline]
-unsafe fn fast_log2f_x86_64_avx2(x: std::arch::x86_64::__m256) -> std::arch::x86_64::__m256 {
-    use std::arch::x86_64::*;
+unsafe fn fast_log2f_x86_64_avx2(x: core::arch::x86_64::__m256) -> core::arch::x86_64::__m256 {
+    use core::arch::x86_64::*;
 
     let x_bits = _mm256_castps_si256(x);
     let exp_bits = _mm256_sub_epi32(x_bits, _mm256_set1_epi32(0x3f2aaaab));
@@ -221,9 +231,9 @@ unsafe fn fast_log2f_x86_64_avx2(x: std::arch::x86_64::__m256) -> std::arch::x86
 #[target_feature(enable = "neon")]
 #[inline]
 unsafe fn fast_log2f_aarch64_neon(
-    x: std::arch::aarch64::float32x4_t,
-) -> std::arch::aarch64::float32x4_t {
-    use std::arch::aarch64::*;
+    x: core::arch::aarch64::float32x4_t,
+) -> core::arch::aarch64::float32x4_t {
+    use core::arch::aarch64::*;
 
     let x_bits = vreinterpretq_s32_f32(x);
     let exp_bits = vsubq_s32(x_bits, vdupq_n_s32(0x3f2aaaab));
@@ -246,11 +256,11 @@ pub fn fast_powf_generic(base: f32, exp: f32) -> f32 {
 #[cfg(target_arch = "x86_64")]
 #[inline]
 pub fn fast_powf_x86_64_sse2(
-    base: std::arch::x86_64::__m128,
-    exp: std::arch::x86_64::__m128,
-) -> std::arch::x86_64::__m128 {
+    base: core::arch::x86_64::__m128,
+    exp: core::arch::x86_64::__m128,
+) -> core::arch::x86_64::__m128 {
     unsafe {
-        fast_pow2f_x86_64_sse2(std::arch::x86_64::_mm_mul_ps(
+        fast_pow2f_x86_64_sse2(core::arch::x86_64::_mm_mul_ps(
             fast_log2f_x86_64_sse2(base),
             exp,
         ))
@@ -261,10 +271,10 @@ pub fn fast_powf_x86_64_sse2(
 #[target_feature(enable = "fma")]
 #[inline]
 pub unsafe fn fast_powf_x86_64_fma(
-    base: std::arch::x86_64::__m128,
-    exp: std::arch::x86_64::__m128,
-) -> std::arch::x86_64::__m128 {
-    fast_pow2f_x86_64_fma(std::arch::x86_64::_mm_mul_ps(
+    base: core::arch::x86_64::__m128,
+    exp: core::arch::x86_64::__m128,
+) -> core::arch::x86_64::__m128 {
+    fast_pow2f_x86_64_fma(core::arch::x86_64::_mm_mul_ps(
         fast_log2f_x86_64_fma(base),
         exp,
     ))
@@ -275,10 +285,10 @@ pub unsafe fn fast_powf_x86_64_fma(
 #[target_feature(enable = "fma")]
 #[inline]
 pub unsafe fn fast_powf_x86_64_avx2(
-    base: std::arch::x86_64::__m256,
-    exp: std::arch::x86_64::__m256,
-) -> std::arch::x86_64::__m256 {
-    fast_pow2f_x86_64_avx2(std::arch::x86_64::_mm256_mul_ps(
+    base: core::arch::x86_64::__m256,
+    exp: core::arch::x86_64::__m256,
+) -> core::arch::x86_64::__m256 {
+    fast_pow2f_x86_64_avx2(core::arch::x86_64::_mm256_mul_ps(
         fast_log2f_x86_64_avx2(base),
         exp,
     ))
@@ -288,10 +298,10 @@ pub unsafe fn fast_powf_x86_64_avx2(
 #[target_feature(enable = "neon")]
 #[inline]
 pub unsafe fn fast_powf_aarch64_neon(
-    base: std::arch::aarch64::float32x4_t,
+    base: core::arch::aarch64::float32x4_t,
     exp: f32,
-) -> std::arch::aarch64::float32x4_t {
-    fast_pow2f_aarch64_neon(std::arch::aarch64::vmulq_n_f32(
+) -> core::arch::aarch64::float32x4_t {
+    fast_pow2f_aarch64_neon(core::arch::aarch64::vmulq_n_f32(
         fast_log2f_aarch64_neon(base),
         exp,
     ))

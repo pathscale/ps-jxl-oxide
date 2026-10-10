@@ -1,5 +1,3 @@
-use std::arch::is_aarch64_feature_detected;
-
 use crate::filter::{
     epf::EpfRowHandler,
     gabor::{GaborRowHandler, run_gabor_row_generic},

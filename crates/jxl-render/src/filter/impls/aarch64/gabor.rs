@@ -1,4 +1,4 @@
-use std::arch::aarch64::*;
+use core::arch::aarch64::*;
 
 use crate::filter::gabor::GaborRow;
 
@@ -81,7 +81,8 @@ pub(super) unsafe fn run_gabor_row_aarch64_neon(row: GaborRow) {
         let b1 = vget_lane_f32::<1>(bl);
         let sum_side = t1 + c0 + c1 + b1;
         let sum_diag = t0 + t1 + b0 + b1;
-        let unweighted_sum = sum_diag.mul_add(w1, sum_side.mul_add(w0, c1));
+        let unweighted_sum =
+            crate::math::mul_add(sum_diag, w1, crate::math::mul_add(sum_side, w0, c1));
         *output_ptr.add(x) = unweighted_sum * global_weight;
     }
 }

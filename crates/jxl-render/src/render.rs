@@ -1,8 +1,8 @@
+use alloc::sync::Arc;
 use jxl_frame::{
     filter::{EdgePreservingFilter, Gabor},
     header::Encoding,
 };
-use std::sync::Arc;
 
 use jxl_modular::Sample;
 use jxl_threadpool::Tasks;

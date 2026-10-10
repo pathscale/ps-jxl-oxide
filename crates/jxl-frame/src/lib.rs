@@ -16,8 +16,14 @@
 //! [`num_lf_groups`]: FrameHeader::num_lf_groups
 //! [`num_groups`]: FrameHeader::num_groups
 //! [`num_passes`]: header::Passes::num_passes
-use std::collections::BTreeMap;
-use std::sync::Arc;
+#![cfg_attr(not(feature = "std"), no_std)]
+use alloc::vec::Vec;
+
+extern crate alloc;
+
+mod math;
+use alloc::collections::BTreeMap;
+use alloc::sync::Arc;
 
 use jxl_bitstream::{Bitstream, Section, Spans};
 use jxl_grid::AllocTracker;
@@ -115,7 +121,7 @@ impl Bundle<FrameContext<'_>> for Frame {
         }
 
         let has_extra = !header.ec_blending_info.is_empty();
-        for blending_info in std::iter::once(&header.blending_info).chain(&header.ec_blending_info)
+        for blending_info in core::iter::once(&header.blending_info).chain(&header.ec_blending_info)
         {
             if blending_info.mode.use_alpha() && has_extra {
                 let alpha_idx = blending_info.alpha_channel as usize;
@@ -259,7 +265,7 @@ impl Frame {
 
 impl Frame {
     /// Retains available ranges and returns the number of logical bytes consumed.
-    pub fn feed_spans(&mut self, source: &Spans, range: std::ops::Range<usize>) -> Result<usize> {
+    pub fn feed_spans(&mut self, source: &Spans, range: core::ops::Range<usize>) -> Result<usize> {
         if range.start > range.end || range.end > source.len() {
             return Err(
                 jxl_bitstream::Error::ValidationFailed("frame input range out of bounds").into(),

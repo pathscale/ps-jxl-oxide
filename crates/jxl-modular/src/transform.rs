@@ -1,4 +1,5 @@
 #![allow(unsafe_op_in_unsafe_fn)]
+use alloc::vec::Vec;
 
 use jxl_bitstream::{Bitstream, U};
 use jxl_grid::{AlignedGrid, AllocTracker, MutableSubgrid};
@@ -505,7 +506,7 @@ impl Squeeze {
                 sp.merge(grid, residual);
                 let horizontal = sp.horizontal;
                 owned::run_stripes(
-                    std::slice::from_mut(grid),
+                    core::slice::from_mut(grid),
                     horizontal,
                     tasks,
                     tracker,

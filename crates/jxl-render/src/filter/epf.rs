@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use alloc::{boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
 
 use jxl_frame::{FrameHeader, data::LfGroup, filter::EpfParams};
 use jxl_grid::AlignedGrid;
@@ -11,7 +11,7 @@ use super::owned::{FilterImage, STRIPE_HEIGHT, Stripe};
 
 pub(crate) async fn apply_epf<S: Sample>(
     mut input: FilterImage,
-    lf_groups: &HashMap<u32, LfGroup<S>>,
+    lf_groups: &BTreeMap<u32, LfGroup<S>>,
     frame_header: &FrameHeader,
     epf_params: &EpfParams,
     tasks: &Tasks,
@@ -89,6 +89,11 @@ pub(super) struct EpfInputRows<'buf> {
 }
 
 impl<'buf> EpfInputRows<'buf> {
+    // The x86_64 and aarch64 EPF kernels read whole rows.
+    #[cfg_attr(
+        not(any(target_arch = "x86_64", target_arch = "aarch64")),
+        allow(dead_code)
+    )]
     #[inline]
     pub(super) fn get_row(&self, y: usize) -> &'buf [f32] {
         self.rows[y]
@@ -157,8 +162,8 @@ async fn run_epf_step<const STEP: usize>(
 
                 let sigma_row = sigma.buf_mut();
                 sigma_row.copy_from_slice(metadata.sigma.get_row(y / 8));
-                let input_rows: [[_; 7]; 3] = std::array::from_fn(|channel| {
-                    std::array::from_fn(|idx| {
+                let input_rows: [[_; 7]; 3] = core::array::from_fn(|channel| {
+                    core::array::from_fn(|idx| {
                         let y = util::mirror((y + idx) as isize - 3, height);
                         input.row(channel, y)
                     })

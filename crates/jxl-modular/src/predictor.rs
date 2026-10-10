@@ -1,3 +1,5 @@
+use alloc::vec;
+use alloc::vec::Vec;
 use jxl_grid::MutableSubgrid;
 use jxl_oxide_common::define_bundle;
 
@@ -555,7 +557,7 @@ impl<S: Sample> Properties<'_, '_, '_, S> {
             pred.y += 1;
             pred.x = 0;
 
-            std::mem::swap(&mut pred.prev_row, &mut pred.curr_row);
+            core::mem::swap(&mut pred.prev_row, &mut pred.curr_row);
             pred.prev_grad = 0;
 
             let n = pred.prev_row[0];

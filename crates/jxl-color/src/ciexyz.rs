@@ -126,7 +126,7 @@ pub fn adapt_mat(from_illuminant: impl AsIlluminant, to_illuminant: impl AsIllum
         to_lms[1] / from_lms[1],
         to_lms[2] / from_lms[2],
     ];
-    let multiplied = std::array::from_fn(|idx| MAT_BRADFORD[idx] * mul[idx / 3]);
+    let multiplied = core::array::from_fn(|idx| MAT_BRADFORD[idx] * mul[idx / 3]);
     matmul3(&MAT_BRADFORD_INV, &multiplied)
 }
 

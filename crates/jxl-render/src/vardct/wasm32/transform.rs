@@ -1,4 +1,4 @@
-use std::arch::wasm32::*;
+use core::arch::wasm32::*;
 
 use jxl_grid::{MutableSubgrid, SharedSubgrid, SimdVector};
 use jxl_modular::ChannelShift;

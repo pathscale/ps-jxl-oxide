@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use jxl_grid::{MutableSubgrid, SharedSubgrid};
 
 use crate::{

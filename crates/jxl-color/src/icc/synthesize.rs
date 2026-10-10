@@ -1,3 +1,5 @@
+use alloc::{format, vec, vec::Vec};
+
 use crate::{
     ColourSpace, EnumColourEncoding, Primaries, RenderingIntent, TransferFunction, WhitePoint,
     ciexyz::*, consts::*, tf,

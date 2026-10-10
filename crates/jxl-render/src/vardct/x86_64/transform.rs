@@ -1,5 +1,4 @@
-use std::arch::is_x86_feature_detected;
-use std::arch::x86_64::*;
+use core::arch::x86_64::*;
 
 use jxl_grid::{MutableSubgrid, SharedSubgrid};
 use jxl_modular::ChannelShift;

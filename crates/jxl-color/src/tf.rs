@@ -1,3 +1,6 @@
+use crate::math::FloatMath;
+use alloc::{vec, vec::Vec};
+
 mod bt709;
 pub(crate) mod pq;
 pub(crate) mod rec2408;
@@ -11,20 +14,20 @@ pub use srgb::*;
 pub fn apply_gamma(samples: &mut [f32], gamma: f32) {
     #[cfg(target_arch = "aarch64")]
     let samples = {
-        if std::arch::is_aarch64_feature_detected!("neon") {
+        if is_aarch64_feature_detected!("neon") {
             let mut it = samples.chunks_exact_mut(4);
             for chunk in &mut it {
                 unsafe {
-                    let v = std::arch::aarch64::vld1q_f32(chunk.as_ptr());
+                    let v = core::arch::aarch64::vld1q_f32(chunk.as_ptr());
                     let mask =
-                        std::arch::aarch64::vcleq_f32(v, std::arch::aarch64::vdupq_n_f32(1e-7));
+                        core::arch::aarch64::vcleq_f32(v, core::arch::aarch64::vdupq_n_f32(1e-7));
                     let exp = crate::fastmath::fast_powf_aarch64_neon(v, gamma);
-                    let v = std::arch::aarch64::vbslq_f32(
+                    let v = core::arch::aarch64::vbslq_f32(
                         mask,
-                        std::arch::aarch64::vdupq_n_f32(0.0),
+                        core::arch::aarch64::vdupq_n_f32(0.0),
                         exp,
                     );
-                    std::arch::aarch64::vst1q_f32(chunk.as_mut_ptr(), v);
+                    core::arch::aarch64::vst1q_f32(chunk.as_mut_ptr(), v);
                 }
             }
             it.into_remainder()
@@ -35,22 +38,21 @@ pub fn apply_gamma(samples: &mut [f32], gamma: f32) {
 
     #[cfg(target_arch = "x86_64")]
     let samples = {
-        if std::arch::is_x86_feature_detected!("avx2") && std::arch::is_x86_feature_detected!("fma")
-        {
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
             unsafe { linear_to_gamma_x86_64_avx2(samples, gamma) }
         } else {
             let mut it = samples.chunks_exact_mut(4);
             for chunk in &mut it {
                 unsafe {
-                    let v = std::arch::x86_64::_mm_loadu_ps(chunk.as_ptr());
+                    let v = core::arch::x86_64::_mm_loadu_ps(chunk.as_ptr());
                     let mask =
-                        std::arch::x86_64::_mm_cmple_ps(v, std::arch::x86_64::_mm_set1_ps(1e-7));
+                        core::arch::x86_64::_mm_cmple_ps(v, core::arch::x86_64::_mm_set1_ps(1e-7));
                     let exp = crate::fastmath::fast_powf_x86_64_sse2(
                         v,
-                        std::arch::x86_64::_mm_set1_ps(gamma),
+                        core::arch::x86_64::_mm_set1_ps(gamma),
                     );
-                    let v = std::arch::x86_64::_mm_andnot_ps(mask, exp);
-                    std::arch::x86_64::_mm_storeu_ps(chunk.as_mut_ptr(), v);
+                    let v = core::arch::x86_64::_mm_andnot_ps(mask, exp);
+                    core::arch::x86_64::_mm_storeu_ps(chunk.as_mut_ptr(), v);
                 }
             }
             it.into_remainder()
@@ -71,7 +73,7 @@ pub fn apply_gamma(samples: &mut [f32], gamma: f32) {
 #[target_feature(enable = "avx2")]
 #[target_feature(enable = "fma")]
 unsafe fn linear_to_gamma_x86_64_avx2(samples: &mut [f32], gamma: f32) -> &mut [f32] {
-    use std::arch::x86_64::*;
+    use core::arch::x86_64::*;
 
     let mut it = samples.chunks_exact_mut(8);
     for chunk in &mut it {
@@ -103,13 +105,13 @@ pub fn hlg_oo(
     [lr, lg, lb]: [f32; 3],
     intensity_target: f32,
 ) {
-    let gamma = 1.2f32 * 1.111f32.powf((intensity_target / 1e3).log2());
+    let gamma = 1.2f32 * 1.111f32.math_powf((intensity_target / 1e3).math_log2());
     // 1/g - 1
     let exp = gamma - 1.0;
 
     for ((r, g), b) in samples_r.iter_mut().zip(samples_g).zip(samples_b) {
-        let mixed = r.mul_add(lr, g.mul_add(lg, *b * lb));
-        let mult = mixed.powf(exp);
+        let mixed = r.math_mul_add(lr, g.math_mul_add(lg, *b * lb));
+        let mult = mixed.math_powf(exp);
         *r *= mult;
         *g *= mult;
         *b *= mult;
@@ -128,13 +130,13 @@ pub fn hlg_inverse_oo(
         return;
     }
 
-    let gamma = 1.2f32 * 1.111f32.powf((intensity_target / 1e3).log2());
+    let gamma = 1.2f32 * 1.111f32.math_powf((intensity_target / 1e3).math_log2());
     // 1/g - 1
     let exp = (1.0 - gamma) / gamma;
 
     for ((r, g), b) in samples_r.iter_mut().zip(samples_g).zip(samples_b) {
-        let mixed = r.mul_add(lr, g.mul_add(lg, *b * lb));
-        let mult = mixed.powf(exp);
+        let mixed = r.math_mul_add(lr, g.math_mul_add(lg, *b * lb));
+        let mult = mixed.math_powf(exp);
         *r *= mult;
         *g *= mult;
         *b *= mult;
@@ -150,9 +152,9 @@ pub fn linear_to_hlg(samples: &mut [f32]) {
     for s in samples {
         let a = s.abs();
         *s = if a <= 1.0 / 12.0 {
-            (3.0 * a).sqrt()
+            (3.0 * a).math_sqrt()
         } else {
-            HLG_A * a.mul_add(12.0, -HLG_B).ln() + HLG_C
+            HLG_A * a.math_mul_add(12.0, -HLG_B).math_ln() + HLG_C
         }
         .copysign(*s);
     }
@@ -165,7 +167,7 @@ pub fn hlg_to_linear(samples: &mut [f32]) {
         *s = if a <= 0.5 {
             a * a / 3.0
         } else {
-            (((a - HLG_C) / HLG_A).exp() + HLG_B) / 12.0
+            (((a - HLG_C) / HLG_A).math_exp() + HLG_B) / 12.0
         }
         .copysign(*s);
     }
@@ -184,7 +186,7 @@ pub(crate) fn hlg_table(n: usize) -> Vec<u16> {
     for (idx, out) in out[(n - 1) / 2 + 1..].iter_mut().enumerate() {
         let idx = idx + (n - 1) / 2 + 1;
         let e = idx as f64 / (n - 1) as f64;
-        let d = (((e - C) / A).exp() + B) / 12.0;
+        let d = (((e - C) / A).math_exp() + B) / 12.0;
         *out = (d * 65535.0) as u16; // clamped
     }
     out

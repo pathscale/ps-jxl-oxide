@@ -1,3 +1,4 @@
+use alloc::vec;
 use jxl_bitstream::Bitstream;
 use jxl_grid::{AlignedGrid, AllocTracker};
 use jxl_modular::{MaConfig, Modular, ModularChannelParams, ModularParams};

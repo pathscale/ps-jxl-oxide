@@ -69,7 +69,7 @@ pub(crate) fn epf_row<const STEP: usize>(epf_row: EpfRow<'_, '_>) {
         }
 
         let mut sum_weights = 1.0f32;
-        let mut sum_channels: [f32; 3] = std::array::from_fn(|c| input_rows[c][3][dx]);
+        let mut sum_channels: [f32; 3] = core::array::from_fn(|c| input_rows[c][3][dx]);
 
         for &(kx, ky) in kernel_offsets {
             let kernel_dy = 3 + ky;
@@ -117,7 +117,7 @@ pub(crate) fn epf_row<const STEP: usize>(epf_row: EpfRow<'_, '_>) {
             }
 
             let mut sum_weights = 1.0f32;
-            let mut sum_channels: [f32; 3] = std::array::from_fn(|c| input_rows[c][3][dx]);
+            let mut sum_channels: [f32; 3] = core::array::from_fn(|c| input_rows[c][3][dx]);
 
             for &(kx, ky) in kernel_offsets {
                 let kernel_dy = 3 + ky;
@@ -166,7 +166,7 @@ pub(crate) fn epf_row<const STEP: usize>(epf_row: EpfRow<'_, '_>) {
         }
 
         let mut sum_weights = 1.0f32;
-        let mut sum_channels: [f32; 3] = std::array::from_fn(|c| input_rows[c][3][dx]);
+        let mut sum_channels: [f32; 3] = core::array::from_fn(|c| input_rows[c][3][dx]);
 
         for &(kx, ky) in kernel_offsets {
             let kernel_dy = 3 + ky;
@@ -205,6 +205,6 @@ pub(crate) fn epf_row<const STEP: usize>(epf_row: EpfRow<'_, '_>) {
 
 #[inline]
 fn weight(scaled_distance: f32, sigma: f32, step_multiplier: f32) -> f32 {
-    let neg_inv_sigma = 6.6 * (std::f32::consts::FRAC_1_SQRT_2 - 1.0) / sigma * step_multiplier;
+    let neg_inv_sigma = 6.6 * (core::f32::consts::FRAC_1_SQRT_2 - 1.0) / sigma * step_multiplier;
     (1.0 + scaled_distance * neg_inv_sigma).max(0.0)
 }

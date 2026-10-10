@@ -58,13 +58,13 @@ pub(crate) fn rec2408_eetf_generic(
 #[target_feature(enable = "fma")]
 #[inline]
 pub(crate) unsafe fn rec2408_eetf_x86_64_avx2(
-    from_pq_sample: std::arch::x86_64::__m256,
+    from_pq_sample: core::arch::x86_64::__m256,
     intensity_target: f32,
     from_luminance_range: (f32, f32),
     to_luminance_range: (f32, f32),
-) -> std::arch::x86_64::__m256 {
+) -> core::arch::x86_64::__m256 {
+    use core::arch::x86_64::*;
     use jxl_grid::SimdVector;
-    use std::arch::x86_64::*;
 
     // Lb, Lw, Lmin, Lmax
     let mut luminances = [
@@ -133,13 +133,13 @@ pub(crate) unsafe fn rec2408_eetf_x86_64_avx2(
 #[target_feature(enable = "fma")]
 #[inline]
 pub(crate) unsafe fn rec2408_eetf_x86_64_fma(
-    from_pq_sample: std::arch::x86_64::__m128,
+    from_pq_sample: core::arch::x86_64::__m128,
     intensity_target: f32,
     from_luminance_range: (f32, f32),
     to_luminance_range: (f32, f32),
-) -> std::arch::x86_64::__m128 {
+) -> core::arch::x86_64::__m128 {
+    use core::arch::x86_64::*;
     use jxl_grid::SimdVector;
-    use std::arch::x86_64::*;
 
     // Lb, Lw, Lmin, Lmax
     let mut luminances = [
@@ -206,13 +206,13 @@ pub(crate) unsafe fn rec2408_eetf_x86_64_fma(
 #[cfg(target_arch = "x86_64")]
 #[inline]
 pub(crate) unsafe fn rec2408_eetf_x86_64_sse2(
-    from_pq_sample: std::arch::x86_64::__m128,
+    from_pq_sample: core::arch::x86_64::__m128,
     intensity_target: f32,
     from_luminance_range: (f32, f32),
     to_luminance_range: (f32, f32),
-) -> std::arch::x86_64::__m128 {
+) -> core::arch::x86_64::__m128 {
+    use core::arch::x86_64::*;
     use jxl_grid::SimdVector;
-    use std::arch::x86_64::*;
 
     // Lb, Lw, Lmin, Lmax
     let mut luminances = [
@@ -282,12 +282,12 @@ pub(crate) unsafe fn rec2408_eetf_x86_64_sse2(
 #[target_feature(enable = "neon")]
 #[inline]
 pub(crate) unsafe fn rec2408_eetf_aarch64_neon(
-    from_pq_sample: std::arch::aarch64::float32x4_t,
+    from_pq_sample: core::arch::aarch64::float32x4_t,
     intensity_target: f32,
     from_luminance_range: (f32, f32),
     to_luminance_range: (f32, f32),
-) -> std::arch::aarch64::float32x4_t {
-    use std::arch::aarch64::*;
+) -> core::arch::aarch64::float32x4_t {
+    use core::arch::aarch64::*;
 
     // Lb, Lw, Lmin, Lmax
     let mut luminances = [

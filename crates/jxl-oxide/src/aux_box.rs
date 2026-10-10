@@ -1,11 +1,14 @@
+use alloc::{boxed::Box, vec::Vec};
+#[cfg(feature = "std")]
 use std::io::Write;
 
-use brotli_decompressor::DecompressorWriter;
+use self::brotli::BrotliReader;
 use jxl_bitstream::ParseEvent;
 use jxl_bitstream::container::ContainerBoxType;
 
 use crate::Result;
 
+mod brotli;
 mod exif;
 
 pub use exif::*;
@@ -22,11 +25,11 @@ enum DataKind {
     Init,
     NoData,
     Raw(Vec<u8>),
-    Brotli(Box<DecompressorWriter<Vec<u8>>>),
+    Brotli(Box<BrotliReader>),
 }
 
-impl std::fmt::Debug for DataKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for DataKind {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Init => write!(f, "Init"),
             Self::NoData => write!(f, "NoData"),
@@ -67,7 +70,7 @@ impl AuxBoxReader {
 
         match self.data {
             DataKind::Init => {
-                let writer = DecompressorWriter::new(Vec::<u8>::new(), 4096);
+                let writer = BrotliReader::new(Vec::<u8>::new(), 4096);
                 self.data = DataKind::Brotli(Box::new(writer));
             }
             DataKind::NoData | DataKind::Raw(_) => {
@@ -82,11 +85,7 @@ impl AuxBoxReader {
 impl AuxBoxReader {
     pub fn feed_data(&mut self, data: &[u8]) -> Result<()> {
         if self.done {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "cannot feed into finalized box",
-            )
-            .into());
+            return Err(crate::error::Error::InvalidData("cannot feed into finalized box").into());
         }
 
         match self.data {
@@ -116,7 +115,7 @@ impl AuxBoxReader {
             writer.close()?;
         }
 
-        match std::mem::replace(&mut self.data, DataKind::NoData) {
+        match core::mem::replace(&mut self.data, DataKind::NoData) {
             DataKind::Init | DataKind::NoData => {}
             DataKind::Raw(buf) => self.data = DataKind::Raw(buf),
             DataKind::Brotli(writer) => {
@@ -161,8 +160,8 @@ pub enum AuxBoxData<T> {
     NotFound,
 }
 
-impl<T> std::fmt::Debug for AuxBoxData<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<T> core::fmt::Debug for AuxBoxData<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Data(_) => write!(f, "Data(_)"),
             Self::Decoding => write!(f, "Decoding"),
@@ -215,8 +214,8 @@ impl<T> AuxBoxData<T> {
     }
 }
 
-impl<T, E> AuxBoxData<std::result::Result<T, E>> {
-    pub fn transpose(self) -> std::result::Result<AuxBoxData<T>, E> {
+impl<T, E> AuxBoxData<core::result::Result<T, E>> {
+    pub fn transpose(self) -> core::result::Result<AuxBoxData<T>, E> {
         match self {
             Self::Data(Ok(x)) => Ok(AuxBoxData::Data(x)),
             Self::Data(Err(e)) => Err(e),
@@ -289,7 +288,7 @@ impl AuxBoxList {
             Some(ContainerBoxType::JPEG_RECONSTRUCTION) => {}
             Some(ty) => {
                 self.current_box.finalize()?;
-                let finished_box = std::mem::replace(&mut self.current_box, AuxBoxReader::new());
+                let finished_box = core::mem::replace(&mut self.current_box, AuxBoxReader::new());
                 self.boxes.push((ty, finished_box));
             }
             None => {

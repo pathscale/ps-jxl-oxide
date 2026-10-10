@@ -1,9 +1,8 @@
 //! Approximation of perceptual quantizer transfer functions, ported from libjxl.
 
-#[cfg(target_arch = "aarch64")]
-use std::arch::is_aarch64_feature_detected;
-#[cfg(target_arch = "x86_64")]
-use std::arch::is_x86_feature_detected;
+use alloc::{vec, vec::Vec};
+
+use crate::math::FloatMath;
 
 use crate::fastmath::rational_poly;
 
@@ -44,8 +43,8 @@ pub fn linear_to_pq(mut samples: &mut [f32], intensity_target: f32) {
     unsafe fn run_avx2(samples: &mut [f32], intensity_target: f32) -> &mut [f32] {
         let mut it = samples.chunks_exact_mut(8);
         for s in &mut it {
-            let v = std::arch::x86_64::_mm256_loadu_ps(s.as_ptr());
-            std::arch::x86_64::_mm256_storeu_ps(
+            let v = core::arch::x86_64::_mm256_loadu_ps(s.as_ptr());
+            core::arch::x86_64::_mm256_storeu_ps(
                 s.as_mut_ptr(),
                 linear_to_pq_x86_64_avx2(v, intensity_target),
             );
@@ -59,8 +58,8 @@ pub fn linear_to_pq(mut samples: &mut [f32], intensity_target: f32) {
     unsafe fn run_fma(samples: &mut [f32], intensity_target: f32) -> &mut [f32] {
         let mut it = samples.chunks_exact_mut(4);
         for s in &mut it {
-            let v = std::arch::x86_64::_mm_loadu_ps(s.as_ptr());
-            std::arch::x86_64::_mm_storeu_ps(
+            let v = core::arch::x86_64::_mm_loadu_ps(s.as_ptr());
+            core::arch::x86_64::_mm_storeu_ps(
                 s.as_mut_ptr(),
                 linear_to_pq_x86_64_fma(v, intensity_target),
             );
@@ -73,8 +72,8 @@ pub fn linear_to_pq(mut samples: &mut [f32], intensity_target: f32) {
     unsafe fn run_neon(samples: &mut [f32], intensity_target: f32) -> &mut [f32] {
         let mut it = samples.chunks_exact_mut(4);
         for s in &mut it {
-            let v = std::arch::aarch64::vld1q_f32(s.as_ptr());
-            std::arch::aarch64::vst1q_f32(
+            let v = core::arch::aarch64::vld1q_f32(s.as_ptr());
+            core::arch::aarch64::vst1q_f32(
                 s.as_mut_ptr(),
                 linear_to_pq_aarch64_neon(v, intensity_target),
             );
@@ -100,8 +99,8 @@ pub fn linear_to_pq(mut samples: &mut [f32], intensity_target: f32) {
         // SAFETY: x86_64 implies SSE2.
         unsafe {
             for s in &mut it {
-                let v = std::arch::x86_64::_mm_loadu_ps(s.as_ptr());
-                std::arch::x86_64::_mm_storeu_ps(
+                let v = core::arch::x86_64::_mm_loadu_ps(s.as_ptr());
+                core::arch::x86_64::_mm_storeu_ps(
                     s.as_mut_ptr(),
                     linear_to_pq_x86_64_sse2(v, intensity_target),
                 );
@@ -128,7 +127,7 @@ pub(crate) fn linear_to_pq_generic(s: f32, intensity_target: f32) -> f32 {
     let y_mult = intensity_target / 10000.0;
     let a = s.abs();
     let a_scaled = a * y_mult;
-    let a_1_4 = a_scaled.sqrt().sqrt();
+    let a_1_4 = a_scaled.math_sqrt().math_sqrt();
 
     let y = if a < 1e-4 {
         rational_poly::eval_generic(a_1_4, INV_EOTF_P_SMALL, INV_EOTF_Q_SMALL)
@@ -145,10 +144,10 @@ pub(crate) fn linear_to_pq_generic(s: f32, intensity_target: f32) -> f32 {
 #[target_feature(enable = "fma")]
 #[inline]
 pub(crate) unsafe fn linear_to_pq_x86_64_avx2(
-    v: std::arch::x86_64::__m256,
+    v: core::arch::x86_64::__m256,
     intensity_target: f32,
-) -> std::arch::x86_64::__m256 {
-    use std::arch::x86_64::*;
+) -> core::arch::x86_64::__m256 {
+    use core::arch::x86_64::*;
 
     let y_mult = intensity_target / 10000.0;
     let v_mult = _mm256_set1_ps(y_mult);
@@ -171,10 +170,10 @@ pub(crate) unsafe fn linear_to_pq_x86_64_avx2(
 #[target_feature(enable = "fma")]
 #[inline]
 pub(crate) unsafe fn linear_to_pq_x86_64_fma(
-    v: std::arch::x86_64::__m128,
+    v: core::arch::x86_64::__m128,
     intensity_target: f32,
-) -> std::arch::x86_64::__m128 {
-    use std::arch::x86_64::*;
+) -> core::arch::x86_64::__m128 {
+    use core::arch::x86_64::*;
 
     let y_mult = intensity_target / 10000.0;
     let v_mult = _mm_set1_ps(y_mult);
@@ -195,10 +194,10 @@ pub(crate) unsafe fn linear_to_pq_x86_64_fma(
 #[cfg(target_arch = "x86_64")]
 #[inline]
 pub(crate) unsafe fn linear_to_pq_x86_64_sse2(
-    v: std::arch::x86_64::__m128,
+    v: core::arch::x86_64::__m128,
     intensity_target: f32,
-) -> std::arch::x86_64::__m128 {
-    use std::arch::x86_64::*;
+) -> core::arch::x86_64::__m128 {
+    use core::arch::x86_64::*;
 
     let y_mult = intensity_target / 10000.0;
     let v_mult = _mm_set1_ps(y_mult);
@@ -223,10 +222,10 @@ pub(crate) unsafe fn linear_to_pq_x86_64_sse2(
 #[target_feature(enable = "neon")]
 #[inline]
 pub(crate) unsafe fn linear_to_pq_aarch64_neon(
-    v: std::arch::aarch64::float32x4_t,
+    v: core::arch::aarch64::float32x4_t,
     intensity_target: f32,
-) -> std::arch::aarch64::float32x4_t {
-    use std::arch::aarch64::*;
+) -> core::arch::aarch64::float32x4_t {
+    use core::arch::aarch64::*;
 
     let y_mult = intensity_target / 10000.0;
     let sign_mask = vdupq_n_u32(0x8000_0000);
@@ -254,8 +253,8 @@ pub fn pq_to_linear(mut samples: &mut [f32], intensity_target: f32) {
     unsafe fn run_avx2(samples: &mut [f32], intensity_target: f32) -> &mut [f32] {
         let mut it = samples.chunks_exact_mut(8);
         for s in &mut it {
-            let v = std::arch::x86_64::_mm256_loadu_ps(s.as_ptr());
-            std::arch::x86_64::_mm256_storeu_ps(
+            let v = core::arch::x86_64::_mm256_loadu_ps(s.as_ptr());
+            core::arch::x86_64::_mm256_storeu_ps(
                 s.as_mut_ptr(),
                 pq_to_linear_x86_64_avx2(v, intensity_target),
             );
@@ -269,8 +268,8 @@ pub fn pq_to_linear(mut samples: &mut [f32], intensity_target: f32) {
     unsafe fn run_fma(samples: &mut [f32], intensity_target: f32) -> &mut [f32] {
         let mut it = samples.chunks_exact_mut(4);
         for s in &mut it {
-            let v = std::arch::x86_64::_mm_loadu_ps(s.as_ptr());
-            std::arch::x86_64::_mm_storeu_ps(
+            let v = core::arch::x86_64::_mm_loadu_ps(s.as_ptr());
+            core::arch::x86_64::_mm_storeu_ps(
                 s.as_mut_ptr(),
                 pq_to_linear_x86_64_fma(v, intensity_target),
             );
@@ -283,8 +282,8 @@ pub fn pq_to_linear(mut samples: &mut [f32], intensity_target: f32) {
     unsafe fn run_neon(samples: &mut [f32], intensity_target: f32) -> &mut [f32] {
         let mut it = samples.chunks_exact_mut(4);
         for s in &mut it {
-            let v = std::arch::aarch64::vld1q_f32(s.as_ptr());
-            std::arch::aarch64::vst1q_f32(
+            let v = core::arch::aarch64::vld1q_f32(s.as_ptr());
+            core::arch::aarch64::vst1q_f32(
                 s.as_mut_ptr(),
                 pq_to_linear_aarch64_neon(v, intensity_target),
             );
@@ -310,8 +309,8 @@ pub fn pq_to_linear(mut samples: &mut [f32], intensity_target: f32) {
         // SAFETY: x86_64 implies SSE2.
         unsafe {
             for s in &mut it {
-                let v = std::arch::x86_64::_mm_loadu_ps(s.as_ptr());
-                std::arch::x86_64::_mm_storeu_ps(
+                let v = core::arch::x86_64::_mm_loadu_ps(s.as_ptr());
+                core::arch::x86_64::_mm_storeu_ps(
                     s.as_mut_ptr(),
                     pq_to_linear_x86_64_sse2(v, intensity_target),
                 );
@@ -337,7 +336,7 @@ pub fn pq_to_linear(mut samples: &mut [f32], intensity_target: f32) {
 pub(crate) fn pq_to_linear_generic(s: f32, intensity_target: f32) -> f32 {
     let y_mult = 10000.0 / intensity_target;
     let a = s.abs();
-    let x = a.mul_add(a, a);
+    let x = a.math_mul_add(a, a);
     let y = rational_poly::eval_generic(x, EOTF_P, EOTF_Q);
     (y * y_mult).copysign(s)
 }
@@ -347,10 +346,10 @@ pub(crate) fn pq_to_linear_generic(s: f32, intensity_target: f32) -> f32 {
 #[target_feature(enable = "fma")]
 #[inline]
 pub(crate) unsafe fn pq_to_linear_x86_64_avx2(
-    v: std::arch::x86_64::__m256,
+    v: core::arch::x86_64::__m256,
     intensity_target: f32,
-) -> std::arch::x86_64::__m256 {
-    use std::arch::x86_64::*;
+) -> core::arch::x86_64::__m256 {
+    use core::arch::x86_64::*;
 
     let y_mult = 10000.0 / intensity_target;
     let v_mult = _mm256_set1_ps(y_mult);
@@ -369,10 +368,10 @@ pub(crate) unsafe fn pq_to_linear_x86_64_avx2(
 #[target_feature(enable = "fma")]
 #[inline]
 pub(crate) unsafe fn pq_to_linear_x86_64_fma(
-    v: std::arch::x86_64::__m128,
+    v: core::arch::x86_64::__m128,
     intensity_target: f32,
-) -> std::arch::x86_64::__m128 {
-    use std::arch::x86_64::*;
+) -> core::arch::x86_64::__m128 {
+    use core::arch::x86_64::*;
 
     let y_mult = 10000.0 / intensity_target;
     let v_mult = _mm_set1_ps(y_mult);
@@ -390,10 +389,10 @@ pub(crate) unsafe fn pq_to_linear_x86_64_fma(
 #[cfg(target_arch = "x86_64")]
 #[inline]
 pub(crate) unsafe fn pq_to_linear_x86_64_sse2(
-    v: std::arch::x86_64::__m128,
+    v: core::arch::x86_64::__m128,
     intensity_target: f32,
-) -> std::arch::x86_64::__m128 {
-    use std::arch::x86_64::*;
+) -> core::arch::x86_64::__m128 {
+    use core::arch::x86_64::*;
 
     let y_mult = 10000.0 / intensity_target;
     let v_mult = _mm_set1_ps(y_mult);
@@ -412,10 +411,10 @@ pub(crate) unsafe fn pq_to_linear_x86_64_sse2(
 #[target_feature(enable = "neon")]
 #[inline]
 pub(crate) unsafe fn pq_to_linear_aarch64_neon(
-    v: std::arch::aarch64::float32x4_t,
+    v: core::arch::aarch64::float32x4_t,
     intensity_target: f32,
-) -> std::arch::aarch64::float32x4_t {
-    use std::arch::aarch64::*;
+) -> core::arch::aarch64::float32x4_t {
+    use core::arch::aarch64::*;
 
     let y_mult = 10000.0 / intensity_target;
     let sign_mask = vdupq_n_u32(0x8000_0000);
@@ -440,17 +439,19 @@ pub(crate) fn pq_table(n: usize) -> Vec<u16> {
     for (idx, out) in out.iter_mut().enumerate() {
         let e = idx as f64 / (n - 1) as f64;
 
-        let e_pow = e.powf(M2_RECIP_F64);
+        let e_pow = e.math_powf(M2_RECIP_F64);
         let numerator = (e_pow - C1_F64).max(0.0);
-        let denominator = e_pow.mul_add(-C3_F64, C2_F64);
-        let d = (numerator / denominator).powf(M1_RECIP_F64);
+        let denominator = e_pow.math_mul_add(-C3_F64, C2_F64);
+        let d = (numerator / denominator).math_powf(M1_RECIP_F64);
         *out = (d * 65535.0) as u16; // clamped
     }
     out
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
+    use super::FloatMath;
+
     const M1: f32 = 1305.0 / 8192.0;
     const M2: f32 = 2523.0 / 32.0;
     const C1: f32 = 107.0 / 128.0;
@@ -470,8 +471,9 @@ mod tests {
 
         for (idx, v) in input.iter().enumerate() {
             let linear = idx as f32 * 1e-5;
-            let y_m1 = linear.powf(M1);
-            let expected = ((y_m1.mul_add(C2, C1)) / (y_m1.mul_add(C3, 1.0))).powf(M2);
+            let y_m1 = linear.math_powf(M1);
+            let expected =
+                ((y_m1.math_mul_add(C2, C1)) / (y_m1.math_mul_add(C3, 1.0))).math_powf(M2);
             let diff = (expected - *v).abs();
             assert!(diff < 1e-6);
         }
@@ -488,8 +490,9 @@ mod tests {
 
         for (idx, v) in input.iter().enumerate() {
             let linear = idx as f32 * 1e-5;
-            let y_m1 = linear.powf(M1);
-            let expected = ((y_m1.mul_add(C2, C1)) / (y_m1.mul_add(C3, 1.0))).powf(M2);
+            let y_m1 = linear.math_powf(M1);
+            let expected =
+                ((y_m1.math_mul_add(C2, C1)) / (y_m1.math_mul_add(C3, 1.0))).math_powf(M2);
             let diff = (expected - *v).abs();
             assert!(diff < 1e-6);
         }

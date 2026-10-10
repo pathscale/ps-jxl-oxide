@@ -9,7 +9,42 @@
 //! # Modules
 //! - [`consts`] defines constants used by the various colorspaces.
 //! - [`icc`] provides functions related to ICC profiles.
+#![cfg_attr(not(feature = "std"), no_std)]
 #![allow(unsafe_op_in_unsafe_fn)]
+
+extern crate alloc;
+
+#[cfg(all(not(feature = "std"), not(feature = "libm")))]
+compile_error!("enable the libm feature when building jxl-color without std");
+
+// Keep host dispatch under std and use only guaranteed CPU features without std.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+macro_rules! is_x86_feature_detected {
+    ($feature:tt) => {
+        std::arch::is_x86_feature_detected!($feature)
+    };
+}
+
+#[cfg(all(target_arch = "x86_64", not(feature = "std")))]
+macro_rules! is_x86_feature_detected {
+    ($feature:tt) => {
+        cfg!(target_feature = $feature)
+    };
+}
+
+#[cfg(all(target_arch = "aarch64", feature = "std"))]
+macro_rules! is_aarch64_feature_detected {
+    ($feature:tt) => {
+        std::arch::is_aarch64_feature_detected!($feature)
+    };
+}
+
+#[cfg(all(target_arch = "aarch64", not(feature = "std")))]
+macro_rules! is_aarch64_feature_detected {
+    ($feature:tt) => {
+        cfg!(target_feature = $feature)
+    };
+}
 
 mod ciexyz;
 mod cms;
@@ -19,6 +54,7 @@ mod error;
 mod fastmath;
 mod gamut;
 pub mod icc;
+mod math;
 mod tf;
 mod xyb;
 mod ycbcr;

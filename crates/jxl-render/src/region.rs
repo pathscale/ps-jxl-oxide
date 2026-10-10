@@ -74,10 +74,10 @@ impl Region {
         let mut bx = (rhs.left, rhs.right());
         let mut by = (rhs.top, rhs.bottom());
         if ax.0 > bx.0 {
-            std::mem::swap(&mut ax, &mut bx);
+            core::mem::swap(&mut ax, &mut bx);
         }
         if ay.0 > by.0 {
-            std::mem::swap(&mut ay, &mut by);
+            core::mem::swap(&mut ay, &mut by);
         }
 
         if ax.1 <= bx.0 || ay.1 <= by.0 {
@@ -91,8 +91,8 @@ impl Region {
             Self {
                 left: bx.0,
                 top: by.0,
-                width: std::cmp::min(ax.1, bx.1).abs_diff(bx.0),
-                height: std::cmp::min(ay.1, by.1).abs_diff(by.0),
+                width: core::cmp::min(ax.1, bx.1).abs_diff(bx.0),
+                height: core::cmp::min(ay.1, by.1).abs_diff(by.0),
             }
         }
     }
@@ -243,10 +243,10 @@ impl Region {
         );
 
         if left > right {
-            std::mem::swap(&mut left, &mut right);
+            core::mem::swap(&mut left, &mut right);
         }
         if top > bottom {
-            std::mem::swap(&mut top, &mut bottom);
+            core::mem::swap(&mut top, &mut bottom);
         }
         let width = right.abs_diff(left) + 1;
         let height = bottom.abs_diff(top) + 1;

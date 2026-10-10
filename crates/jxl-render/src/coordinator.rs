@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 
 use jxl_color::{
     ColorEncodingWithProfile, ColorTransform, ColourEncoding, EnumColourEncoding, RenderingIntent,
@@ -46,7 +46,7 @@ impl RenderContext {
         let patch_slots = used;
         let header = frame.header();
         if header.frame_type.is_normal_frame() && !header.resets_canvas {
-            for blend in std::iter::once(&header.blending_info).chain(&header.ec_blending_info) {
+            for blend in core::iter::once(&header.blending_info).chain(&header.ec_blending_info) {
                 used[blend.source as usize] = true;
             }
         }

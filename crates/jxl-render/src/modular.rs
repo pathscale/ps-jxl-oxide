@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 
 use jxl_bitstream::{Bitstream, Section};
 use jxl_frame::{

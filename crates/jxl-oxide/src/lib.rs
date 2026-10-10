@@ -19,7 +19,8 @@
 //! The decoder retains each chunk, including incomplete container headers.
 //!
 //! ```no_run
-//! # use std::sync::Arc;
+//! # extern crate alloc;
+//! # use alloc::sync::Arc;
 //! # use jxl_oxide::{JxlImage, InitializeResult};
 //! # async fn next_chunk() -> jxl_oxide::Result<Arc<[u8]>> { Ok(Arc::from([])) }
 //! # async fn run() -> jxl_oxide::Result<()> {
@@ -118,9 +119,15 @@
 //! # }
 //! ```
 
+#![no_std]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-use std::sync::Arc;
+#[macro_use]
+extern crate alloc;
+#[cfg(feature = "std")]
+extern crate std;
+
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 
 use jxl_bitstream::{Bitstream, ContainerParser, ParseEvent};
 pub use jxl_bitstream::{Section, Spans};
@@ -143,11 +150,12 @@ pub use jxl_threadpool::NagoyaExecutor;
 pub use jxl_threadpool::{Cancelled, Job, JobFuture, TaskExecutor, Tasks};
 
 mod aux_box;
+mod error;
 mod fb;
 pub use aux_box::{AuxBoxData, AuxBoxList, RawExif};
 pub use fb::{FrameBuffer, FrameBufferSample, ImageStream};
 
-pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
+pub type Result<T> = core::result::Result<T, Box<dyn core::error::Error + Send + Sync + 'static>>;
 
 /// JPEG XL image decoder builder.
 #[derive(Debug, Default)]
@@ -191,6 +199,7 @@ impl JxlImageBuilder {
     }
 
     /// Reads complete input into one owned buffer, then calls `read_bytes`.
+    #[cfg(feature = "std")]
     pub fn read(self, mut reader: impl std::io::Read) -> Result<JxlImage> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes)?;
@@ -204,11 +213,9 @@ impl JxlImageBuilder {
         let mut image = match uninit.try_init()? {
             InitializeResult::Initialized(image) => image,
             InitializeResult::NeedMoreData(_) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "input ended before parsing image header",
-                )
-                .into());
+                return Err(
+                    error::Error::UnexpectedEof("input ended before parsing image header").into(),
+                );
             }
         };
         image.finalize()?;
@@ -445,6 +452,7 @@ impl JxlImage {
     }
 
     /// Reads an image from the reader with default options.
+    #[cfg(feature = "std")]
     pub fn read_with_defaults(reader: impl std::io::Read) -> Result<JxlImage> {
         Self::builder().read(reader)
     }
@@ -479,11 +487,9 @@ impl JxlImage {
     pub fn finalize(&mut self) -> Result<()> {
         self.reader.finalize()?;
         if !self.inner.end_of_image {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "input ended before loading all image frames",
-            )
-            .into());
+            return Err(
+                error::Error::UnexpectedEof("input ended before loading all image frames").into(),
+            );
         }
         self.inner.aux_boxes.eof()?;
         Ok(())
@@ -690,7 +696,8 @@ impl JxlImage {
 impl JxlImage {
     /// Renders the given keyframe.
     pub fn render_frame(&mut self, keyframe_index: usize) -> Result<Render> {
-        jxl_threadpool::poll_once(self.render_frame_async(keyframe_index))?
+        jxl_threadpool::poll_once(self.render_frame_async(keyframe_index))
+            .map_err(|_| error::Error::RenderSuspended)?
     }
 
     /// Renders the given keyframe with the caller's executor.
@@ -700,7 +707,8 @@ impl JxlImage {
 
     /// Renders the given keyframe with optional cropping region.
     pub fn render_frame_cropped(&mut self, keyframe_index: usize) -> Result<Render> {
-        jxl_threadpool::poll_once(self.render_frame_cropped_async(keyframe_index))?
+        jxl_threadpool::poll_once(self.render_frame_cropped_async(keyframe_index))
+            .map_err(|_| error::Error::RenderSuspended)?
     }
 
     /// Renders the given keyframe in the current cropping region with the caller's executor.
@@ -736,7 +744,8 @@ impl JxlImage {
 
     /// Renders the currently loading keyframe.
     pub fn render_loading_frame(&mut self) -> Result<Render> {
-        jxl_threadpool::poll_once(self.render_loading_frame_async())?
+        jxl_threadpool::poll_once(self.render_loading_frame_async())
+            .map_err(|_| error::Error::RenderSuspended)?
     }
 
     /// Renders the currently loading keyframe with the caller's executor.
@@ -746,7 +755,8 @@ impl JxlImage {
 
     /// Renders the currently loading keyframe with optional cropping region.
     pub fn render_loading_frame_cropped(&mut self) -> Result<Render> {
-        jxl_threadpool::poll_once(self.render_loading_frame_cropped_async())?
+        jxl_threadpool::poll_once(self.render_loading_frame_cropped_async())
+            .map_err(|_| error::Error::RenderSuspended)?
     }
 
     /// Renders the loading keyframe in the current cropping region with the caller's executor.
@@ -1047,7 +1057,7 @@ impl Render {
     /// All extra channels are included.
     pub fn image_planar(&self) -> Vec<FrameBuffer> {
         let grids = self.image.buffer();
-        let bit_depth_it = std::iter::repeat_n(self.color_bit_depth, self.image.color_channels())
+        let bit_depth_it = core::iter::repeat_n(self.color_bit_depth, self.image.color_channels())
             .chain(self.extra_channels.iter().map(|ec| ec.bit_depth));
         let region_it = self
             .image

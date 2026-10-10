@@ -1,5 +1,13 @@
 //! This crate is the core of jxl-oxide that provides JPEG XL renderer.
-use std::sync::Arc;
+
+#![no_std]
+
+#[macro_use]
+extern crate alloc;
+#[cfg(feature = "std")]
+extern crate std;
+
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 
 use jxl_bitstream::Bitstream;
 use jxl_color::{
@@ -12,12 +20,15 @@ use jxl_image::{ImageHeader, ImageMetadata};
 
 use jxl_oxide_common::Bundle;
 
+#[macro_use]
+mod arch;
 mod blend;
 mod coordinator;
 mod error;
 mod features;
 mod filter;
 mod image;
+mod math;
 mod modular;
 mod region;
 mod render;
@@ -57,8 +68,8 @@ pub struct RenderContext {
     force_wide_buffers: bool,
 }
 
-impl std::fmt::Debug for RenderContext {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for RenderContext {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RenderContext").finish_non_exhaustive()
     }
 }
@@ -469,7 +480,7 @@ impl IndexedFrame {
     }
 }
 
-impl std::ops::Deref for IndexedFrame {
+impl core::ops::Deref for IndexedFrame {
     type Target = Frame;
 
     fn deref(&self) -> &Self::Target {
@@ -477,7 +488,7 @@ impl std::ops::Deref for IndexedFrame {
     }
 }
 
-impl std::ops::DerefMut for IndexedFrame {
+impl core::ops::DerefMut for IndexedFrame {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.f
     }

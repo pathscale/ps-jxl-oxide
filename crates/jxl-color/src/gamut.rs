@@ -46,12 +46,12 @@ pub(crate) fn map_gamut_generic(
 #[target_feature(enable = "sse4.1")]
 #[inline]
 pub(crate) unsafe fn map_gamut_x86_64_avx2(
-    rgb: [std::arch::x86_64::__m256; 3],
+    rgb: [core::arch::x86_64::__m256; 3],
     luminance: [f32; 3],
     saturation_factor: f32,
-) -> [std::arch::x86_64::__m256; 3] {
+) -> [core::arch::x86_64::__m256; 3] {
+    use core::arch::x86_64::*;
     use jxl_grid::SimdVector;
-    use std::arch::x86_64::*;
 
     let [vr, vg, vb] = rgb;
     let [vlr, vlg, vlb] = luminance.map(|v| _mm256_set1_ps(v));
@@ -106,12 +106,12 @@ pub(crate) unsafe fn map_gamut_x86_64_avx2(
 #[target_feature(enable = "sse4.1")]
 #[inline]
 pub(crate) unsafe fn map_gamut_x86_64_fma(
-    rgb: [std::arch::x86_64::__m128; 3],
+    rgb: [core::arch::x86_64::__m128; 3],
     luminance: [f32; 3],
     saturation_factor: f32,
-) -> [std::arch::x86_64::__m128; 3] {
+) -> [core::arch::x86_64::__m128; 3] {
+    use core::arch::x86_64::*;
     use jxl_grid::SimdVector;
-    use std::arch::x86_64::*;
 
     let [vr, vg, vb] = rgb;
     let [vlr, vlg, vlb] = luminance.map(|v| _mm_set1_ps(v));
@@ -161,12 +161,12 @@ pub(crate) unsafe fn map_gamut_x86_64_fma(
 #[cfg(target_arch = "x86_64")]
 #[inline]
 pub(crate) unsafe fn map_gamut_x86_64_sse2(
-    rgb: [std::arch::x86_64::__m128; 3],
+    rgb: [core::arch::x86_64::__m128; 3],
     luminance: [f32; 3],
     saturation_factor: f32,
-) -> [std::arch::x86_64::__m128; 3] {
+) -> [core::arch::x86_64::__m128; 3] {
+    use core::arch::x86_64::*;
     use jxl_grid::SimdVector;
-    use std::arch::x86_64::*;
 
     let [vr, vg, vb] = rgb;
     let [vlr, vlg, vlb] = luminance.map(|v| _mm_set1_ps(v));
@@ -218,12 +218,12 @@ pub(crate) unsafe fn map_gamut_x86_64_sse2(
 #[target_feature(enable = "neon")]
 #[inline]
 pub(crate) unsafe fn map_gamut_aarch64_neon(
-    rgb: [std::arch::aarch64::float32x4_t; 3],
+    rgb: [core::arch::aarch64::float32x4_t; 3],
     luminance: [f32; 3],
     saturation_factor: f32,
-) -> [std::arch::aarch64::float32x4_t; 3] {
+) -> [core::arch::aarch64::float32x4_t; 3] {
+    use core::arch::aarch64::*;
     use jxl_grid::SimdVector;
-    use std::arch::aarch64::*;
 
     let [vr, vg, vb] = rgb;
     let [lr, lg, lb] = luminance;

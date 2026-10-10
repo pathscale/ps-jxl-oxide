@@ -1,8 +1,22 @@
-#[cfg(target_arch = "aarch64")]
+use alloc::vec;
+#[cfg(all(target_arch = "aarch64", feature = "std"))]
 use std::arch::is_aarch64_feature_detected;
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
 use std::arch::is_x86_feature_detected;
-use std::num::Wrapping;
+// Without std there is no runtime detection; use the features the target was compiled with.
+#[cfg(all(target_arch = "aarch64", not(feature = "std")))]
+macro_rules! is_aarch64_feature_detected {
+    ($feature:tt) => {
+        cfg!(target_feature = $feature)
+    };
+}
+#[cfg(all(target_arch = "x86_64", not(feature = "std")))]
+macro_rules! is_x86_feature_detected {
+    ($feature:tt) => {
+        cfg!(target_feature = $feature)
+    };
+}
+use core::num::Wrapping;
 
 use jxl_grid::MutableSubgrid;
 
@@ -124,8 +138,10 @@ fn inverse_h_i16_base(merged: &mut MutableSubgrid<'_, i16>) {
 #[target_feature(enable = "sse4.1")]
 #[target_feature(enable = "sse2")]
 #[inline]
-unsafe fn transpose_i16x16(vs: [std::arch::x86_64::__m256i; 8]) -> [std::arch::x86_64::__m256i; 8] {
-    use std::arch::x86_64::*;
+unsafe fn transpose_i16x16(
+    vs: [core::arch::x86_64::__m256i; 8],
+) -> [core::arch::x86_64::__m256i; 8] {
+    use core::arch::x86_64::*;
 
     let vs = [
         _mm256_unpacklo_epi16(vs[0], vs[1]),
@@ -164,8 +180,10 @@ unsafe fn transpose_i16x16(vs: [std::arch::x86_64::__m256i; 8]) -> [std::arch::x
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
 #[inline]
-unsafe fn transpose_i16x8(vs: [std::arch::x86_64::__m128i; 8]) -> [std::arch::x86_64::__m128i; 8] {
-    use std::arch::x86_64::*;
+unsafe fn transpose_i16x8(
+    vs: [core::arch::x86_64::__m128i; 8],
+) -> [core::arch::x86_64::__m128i; 8] {
+    use core::arch::x86_64::*;
 
     let vs = [
         _mm_unpacklo_epi16(vs[0], vs[1]),
@@ -206,8 +224,8 @@ unsafe fn transpose_i16x8(vs: [std::arch::x86_64::__m128i; 8]) -> [std::arch::x8
 #[target_feature(enable = "sse4.1")]
 #[target_feature(enable = "sse2")]
 unsafe fn inverse_h_i16_x86_64_avx2(merged: &mut MutableSubgrid<'_, i16>) {
-    use std::arch::x86_64::*;
-    use std::mem::MaybeUninit;
+    use core::arch::x86_64::*;
+    use core::mem::MaybeUninit;
 
     let height = merged.height();
     let width = merged.width();
@@ -225,7 +243,7 @@ unsafe fn inverse_h_i16_x86_64_avx2(merged: &mut MutableSubgrid<'_, i16>) {
         let y = y8 * 8;
 
         // SAFETY: Rows are disjoint.
-        let rows: [_; 8] = std::array::from_fn(|dy| merged.get_row_mut(y + dy).as_mut_ptr());
+        let rows: [_; 8] = core::array::from_fn(|dy| merged.get_row_mut(y + dy).as_mut_ptr());
 
         let mut avg = _mm_setr_epi16(
             *rows[0x0], *rows[0x1], *rows[0x2], *rows[0x3], *rows[0x4], *rows[0x5], *rows[0x6],
@@ -234,10 +252,10 @@ unsafe fn inverse_h_i16_x86_64_avx2(merged: &mut MutableSubgrid<'_, i16>) {
         let mut left = avg;
         for x16 in 0..(avg_width - 1) / 16 {
             let x = x16 * 16 + 1;
-            let avgs = transpose_i16x16(std::array::from_fn(|idx| unsafe {
+            let avgs = transpose_i16x16(core::array::from_fn(|idx| unsafe {
                 _mm256_loadu_si256(rows[idx].add(x) as *const _)
             }));
-            let residuals = transpose_i16x16(std::array::from_fn(|idx| unsafe {
+            let residuals = transpose_i16x16(core::array::from_fn(|idx| unsafe {
                 _mm256_loadu_si256(rows[idx].add(avg_width - 1 + x) as *const _)
             }));
 
@@ -273,10 +291,10 @@ unsafe fn inverse_h_i16_x86_64_avx2(merged: &mut MutableSubgrid<'_, i16>) {
         if (avg_width - 1) % 16 >= 8 {
             let x16 = (avg_width - 1) / 16;
             let x = x16 * 16 + 1;
-            let avgs = transpose_i16x8(std::array::from_fn(|idx| unsafe {
+            let avgs = transpose_i16x8(core::array::from_fn(|idx| unsafe {
                 _mm_loadu_si128(rows[idx].add(x) as *const _)
             }));
-            let residuals = transpose_i16x8(std::array::from_fn(|idx| unsafe {
+            let residuals = transpose_i16x8(core::array::from_fn(|idx| unsafe {
                 _mm_loadu_si128(rows[idx].add(avg_width - 1 + x) as *const _)
             }));
             for (dx, (residual, next_avg)) in residuals.into_iter().zip(avgs).enumerate() {
@@ -293,13 +311,13 @@ unsafe fn inverse_h_i16_x86_64_avx2(merged: &mut MutableSubgrid<'_, i16>) {
 
         // Check if we have more data to process.
         if (avg_width - 1) % 8 != 0 || width % 2 == 0 {
-            let mut avgs = transpose_i16x8(std::array::from_fn(|idx| unsafe {
+            let mut avgs = transpose_i16x8(core::array::from_fn(|idx| unsafe {
                 _mm_loadu_si128(rows[idx].add(avg_width - 8) as *const _)
             }));
             if width % 2 == 0 {
-                avgs = std::array::from_fn(|idx| if idx == 7 { avgs[7] } else { avgs[idx + 1] });
+                avgs = core::array::from_fn(|idx| if idx == 7 { avgs[7] } else { avgs[idx + 1] });
             }
-            let residuals = transpose_i16x8(std::array::from_fn(|idx| unsafe {
+            let residuals = transpose_i16x8(core::array::from_fn(|idx| unsafe {
                 _mm_loadu_si128(rows[idx].add(width - 8) as *const _)
             }));
             let from = (!(width / 2) + 1) % 8;
@@ -324,7 +342,7 @@ unsafe fn inverse_h_i16_x86_64_avx2(merged: &mut MutableSubgrid<'_, i16>) {
         let mut chunks_it = scratch.chunks_exact(8);
         for (x8, chunk) in (&mut chunks_it).enumerate() {
             let x = x8 * 8;
-            let v = transpose_i16x8(std::array::from_fn(|idx| unsafe {
+            let v = transpose_i16x8(core::array::from_fn(|idx| unsafe {
                 chunk[idx].assume_init_read()
             }));
             for (row, v) in rows.iter().zip(v) {
@@ -355,8 +373,8 @@ unsafe fn inverse_h_i16_x86_64_avx2(merged: &mut MutableSubgrid<'_, i16>) {
 #[target_feature(enable = "sse2")]
 #[target_feature(enable = "sse4.1")]
 unsafe fn inverse_h_i16_x86_64_sse41(merged: &mut MutableSubgrid<'_, i16>) {
-    use std::arch::x86_64::*;
-    use std::mem::MaybeUninit;
+    use core::arch::x86_64::*;
+    use core::mem::MaybeUninit;
 
     let height = merged.height();
     let width = merged.width();
@@ -374,7 +392,7 @@ unsafe fn inverse_h_i16_x86_64_sse41(merged: &mut MutableSubgrid<'_, i16>) {
         let y = y8 * 8;
 
         // SAFETY: Rows are disjoint.
-        let rows: [_; 8] = std::array::from_fn(|dy| merged.get_row_mut(y + dy).as_mut_ptr());
+        let rows: [_; 8] = core::array::from_fn(|dy| merged.get_row_mut(y + dy).as_mut_ptr());
 
         let mut avg = _mm_setr_epi16(
             *rows[0x0], *rows[0x1], *rows[0x2], *rows[0x3], *rows[0x4], *rows[0x5], *rows[0x6],
@@ -383,10 +401,10 @@ unsafe fn inverse_h_i16_x86_64_sse41(merged: &mut MutableSubgrid<'_, i16>) {
         let mut left = avg;
         for x8 in 0..(avg_width - 1) / 8 {
             let x = x8 * 8 + 1;
-            let avgs = transpose_i16x8(std::array::from_fn(|idx| unsafe {
+            let avgs = transpose_i16x8(core::array::from_fn(|idx| unsafe {
                 _mm_loadu_si128(rows[idx].add(x) as *const _)
             }));
-            let residuals = transpose_i16x8(std::array::from_fn(|idx| unsafe {
+            let residuals = transpose_i16x8(core::array::from_fn(|idx| unsafe {
                 _mm_loadu_si128(rows[idx].add(avg_width - 1 + x) as *const _)
             }));
             for (dx, (residual, next_avg)) in residuals.into_iter().zip(avgs).enumerate() {
@@ -403,13 +421,13 @@ unsafe fn inverse_h_i16_x86_64_sse41(merged: &mut MutableSubgrid<'_, i16>) {
 
         // Check if we have more data to process.
         if (avg_width - 1) % 8 != 0 || width % 2 == 0 {
-            let mut avgs = transpose_i16x8(std::array::from_fn(|idx| unsafe {
+            let mut avgs = transpose_i16x8(core::array::from_fn(|idx| unsafe {
                 _mm_loadu_si128(rows[idx].add(avg_width - 8) as *const _)
             }));
             if width % 2 == 0 {
-                avgs = std::array::from_fn(|idx| if idx == 7 { avgs[7] } else { avgs[idx + 1] });
+                avgs = core::array::from_fn(|idx| if idx == 7 { avgs[7] } else { avgs[idx + 1] });
             }
-            let residuals = transpose_i16x8(std::array::from_fn(|idx| unsafe {
+            let residuals = transpose_i16x8(core::array::from_fn(|idx| unsafe {
                 _mm_loadu_si128(rows[idx].add(width - 8) as *const _)
             }));
             let from = (!(width / 2) + 1) % 8;
@@ -434,7 +452,7 @@ unsafe fn inverse_h_i16_x86_64_sse41(merged: &mut MutableSubgrid<'_, i16>) {
         let mut chunks_it = scratch.chunks_exact(8);
         for (x8, chunk) in (&mut chunks_it).enumerate() {
             let x = x8 * 8;
-            let v = transpose_i16x8(std::array::from_fn(|idx| unsafe {
+            let v = transpose_i16x8(core::array::from_fn(|idx| unsafe {
                 chunk[idx].assume_init_read()
             }));
             for (row, v) in rows.iter().zip(v) {
@@ -464,8 +482,8 @@ unsafe fn inverse_h_i16_x86_64_sse41(merged: &mut MutableSubgrid<'_, i16>) {
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 unsafe fn inverse_h_i16_aarch64_neon(merged: &mut MutableSubgrid<'_, i16>) {
-    use std::arch::aarch64::*;
-    use std::mem::MaybeUninit;
+    use core::arch::aarch64::*;
+    use core::mem::MaybeUninit;
 
     #[inline]
     unsafe fn transpose([v0, v1, v2, v3]: [int16x4_t; 4]) -> [int16x4_t; 4] {
@@ -611,8 +629,8 @@ unsafe fn inverse_h_i16_aarch64_neon(merged: &mut MutableSubgrid<'_, i16>) {
 
 #[cfg(all(target_family = "wasm", target_feature = "simd128"))]
 unsafe fn inverse_h_i16_wasm32_simd128(merged: &mut MutableSubgrid<'_, i16>) {
-    use std::arch::wasm32::*;
-    use std::mem::MaybeUninit;
+    use core::arch::wasm32::*;
+    use core::mem::MaybeUninit;
 
     #[inline]
     unsafe fn transpose(vs: [v128; 8]) -> [v128; 8] {
@@ -666,7 +684,7 @@ unsafe fn inverse_h_i16_wasm32_simd128(merged: &mut MutableSubgrid<'_, i16>) {
         let y = y8 * 8;
 
         // SAFETY: Rows are disjoint.
-        let rows: [_; 8] = std::array::from_fn(|dy| merged.get_row_mut(y + dy).as_mut_ptr());
+        let rows: [_; 8] = core::array::from_fn(|dy| merged.get_row_mut(y + dy).as_mut_ptr());
 
         let mut avg = i16x8(
             *rows[0], *rows[1], *rows[2], *rows[3], *rows[4], *rows[5], *rows[6], *rows[7],
@@ -674,10 +692,10 @@ unsafe fn inverse_h_i16_wasm32_simd128(merged: &mut MutableSubgrid<'_, i16>) {
         let mut left = avg;
         for x8 in 0..(avg_width - 1) / 8 {
             let x = x8 * 8 + 1;
-            let avgs = transpose(std::array::from_fn(|idx| unsafe {
+            let avgs = transpose(core::array::from_fn(|idx| unsafe {
                 v128_load(rows[idx].add(x) as *const _)
             }));
-            let residuals = transpose(std::array::from_fn(|idx| unsafe {
+            let residuals = transpose(core::array::from_fn(|idx| unsafe {
                 v128_load(rows[idx].add(avg_width - 1 + x) as *const _)
             }));
             for (dx, (residual, next_avg)) in residuals.into_iter().zip(avgs).enumerate() {
@@ -694,13 +712,13 @@ unsafe fn inverse_h_i16_wasm32_simd128(merged: &mut MutableSubgrid<'_, i16>) {
 
         // Check if we have more data to process.
         if (avg_width - 1) % 8 != 0 || width % 2 == 0 {
-            let mut avgs = transpose(std::array::from_fn(|idx| unsafe {
+            let mut avgs = transpose(core::array::from_fn(|idx| unsafe {
                 v128_load(rows[idx].add(avg_width - 8) as *const _)
             }));
             if width % 2 == 0 {
-                avgs = std::array::from_fn(|idx| if idx == 7 { avgs[7] } else { avgs[idx + 1] });
+                avgs = core::array::from_fn(|idx| if idx == 7 { avgs[7] } else { avgs[idx + 1] });
             }
-            let residuals = transpose(std::array::from_fn(|idx| unsafe {
+            let residuals = transpose(core::array::from_fn(|idx| unsafe {
                 v128_load(rows[idx].add(width - 8) as *const _)
             }));
             let from = (!(width / 2) + 1) % 8;
@@ -725,7 +743,7 @@ unsafe fn inverse_h_i16_wasm32_simd128(merged: &mut MutableSubgrid<'_, i16>) {
         let mut chunks_it = scratch.chunks_exact(8);
         for (x8, chunk) in (&mut chunks_it).enumerate() {
             let x = x8 * 8;
-            let v = transpose(std::array::from_fn(|idx| unsafe {
+            let v = transpose(core::array::from_fn(|idx| unsafe {
                 chunk[idx].assume_init_read()
             }));
             for (row, v) in rows.iter().zip(v) {
@@ -866,8 +884,8 @@ fn inverse_v_i16_base(merged: &mut MutableSubgrid<'_, i16>) {
 #[target_feature(enable = "sse4.1")]
 #[target_feature(enable = "sse2")]
 unsafe fn inverse_v_i16_x86_64_avx2(merged: &mut MutableSubgrid<'_, i16>) {
-    use std::arch::x86_64::*;
-    use std::mem::MaybeUninit;
+    use core::arch::x86_64::*;
+    use core::mem::MaybeUninit;
 
     let width = merged.width();
     let height = merged.height();
@@ -928,8 +946,8 @@ unsafe fn inverse_v_i16_x86_64_avx2(merged: &mut MutableSubgrid<'_, i16>) {
 #[target_feature(enable = "sse4.1")]
 #[target_feature(enable = "sse2")]
 unsafe fn inverse_v_i16_x86_64_sse41(merged: &mut MutableSubgrid<'_, i16>) {
-    use std::arch::x86_64::*;
-    use std::mem::MaybeUninit;
+    use core::arch::x86_64::*;
+    use core::mem::MaybeUninit;
 
     let width = merged.width();
     let height = merged.height();
@@ -987,8 +1005,8 @@ unsafe fn inverse_v_i16_x86_64_sse41(merged: &mut MutableSubgrid<'_, i16>) {
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 unsafe fn inverse_v_i16_aarch64_neon(merged: &mut MutableSubgrid<'_, i16>) {
-    use std::arch::aarch64::*;
-    use std::mem::MaybeUninit;
+    use core::arch::aarch64::*;
+    use core::mem::MaybeUninit;
 
     let width = merged.width();
     let height = merged.height();
@@ -1045,8 +1063,8 @@ unsafe fn inverse_v_i16_aarch64_neon(merged: &mut MutableSubgrid<'_, i16>) {
 
 #[cfg(all(target_family = "wasm", target_feature = "simd128"))]
 unsafe fn inverse_v_i16_wasm32_simd128(merged: &mut MutableSubgrid<'_, i16>) {
-    use std::arch::wasm32::*;
-    use std::mem::MaybeUninit;
+    use core::arch::wasm32::*;
+    use core::mem::MaybeUninit;
 
     let width = merged.width();
     let height = merged.height();
@@ -1174,11 +1192,11 @@ fn tendency_i16(a: i16, b: i16, c: i16) -> i16 {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn tendency_i16_x86_64_avx2(
-    a: std::arch::x86_64::__m256i,
-    b: std::arch::x86_64::__m256i,
-    c: std::arch::x86_64::__m256i,
-) -> std::arch::x86_64::__m256i {
-    use std::arch::x86_64::*;
+    a: core::arch::x86_64::__m256i,
+    b: core::arch::x86_64::__m256i,
+    c: core::arch::x86_64::__m256i,
+) -> core::arch::x86_64::__m256i {
+    use core::arch::x86_64::*;
 
     let a_b = _mm256_sub_epi16(a, b);
     let b_c = _mm256_sub_epi16(b, c);
@@ -1229,11 +1247,11 @@ unsafe fn tendency_i16_x86_64_avx2(
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse4.1")]
 unsafe fn tendency_i16_x86_64_sse41(
-    a: std::arch::x86_64::__m128i,
-    b: std::arch::x86_64::__m128i,
-    c: std::arch::x86_64::__m128i,
-) -> std::arch::x86_64::__m128i {
-    use std::arch::x86_64::*;
+    a: core::arch::x86_64::__m128i,
+    b: core::arch::x86_64::__m128i,
+    c: core::arch::x86_64::__m128i,
+) -> core::arch::x86_64::__m128i {
+    use core::arch::x86_64::*;
 
     let a_b = _mm_sub_epi16(a, b);
     let b_c = _mm_sub_epi16(b, c);
@@ -1281,11 +1299,11 @@ unsafe fn tendency_i16_x86_64_sse41(
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 unsafe fn tendency_i16_neon(
-    a: std::arch::aarch64::int16x4_t,
-    b: std::arch::aarch64::int16x4_t,
-    c: std::arch::aarch64::int16x4_t,
-) -> std::arch::aarch64::int16x4_t {
-    use std::arch::aarch64::*;
+    a: core::arch::aarch64::int16x4_t,
+    b: core::arch::aarch64::int16x4_t,
+    c: core::arch::aarch64::int16x4_t,
+) -> core::arch::aarch64::int16x4_t {
+    use core::arch::aarch64::*;
 
     let a_b = vsub_s16(a, b);
     let b_c = vsub_s16(b, c);
@@ -1328,11 +1346,11 @@ unsafe fn tendency_i16_neon(
 
 #[cfg(all(target_family = "wasm", target_feature = "simd128"))]
 fn tendency_i16_wasm32_simd128(
-    a: std::arch::wasm32::v128,
-    b: std::arch::wasm32::v128,
-    c: std::arch::wasm32::v128,
-) -> std::arch::wasm32::v128 {
-    use std::arch::wasm32::*;
+    a: core::arch::wasm32::v128,
+    b: core::arch::wasm32::v128,
+    c: core::arch::wasm32::v128,
+) -> core::arch::wasm32::v128 {
+    use core::arch::wasm32::*;
 
     let a_b = i16x8_sub(a, b);
     let b_c = i16x8_sub(b, c);

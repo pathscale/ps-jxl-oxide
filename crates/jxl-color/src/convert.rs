@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use alloc::{boxed::Box, sync::Arc, vec, vec::Vec};
 
 use crate::{
     ColorManagementSystem, ColourEncoding, ColourSpace, EnumColourEncoding, Error,
@@ -17,8 +17,8 @@ pub struct ColorEncodingWithProfile {
     is_cmyk: bool,
 }
 
-impl std::fmt::Debug for ColorEncodingWithProfile {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for ColorEncodingWithProfile {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ColorEncodingWithProfile")
             .field("encoding", &self.encoding)
             .field(
@@ -739,8 +739,8 @@ enum ColorTransformOp {
     IccToIcc(Arc<dyn PreparedTransform>),
 }
 
-impl std::fmt::Debug for ColorTransformOp {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for ColorTransformOp {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::XybToMixedLms {
                 opsin_bias,

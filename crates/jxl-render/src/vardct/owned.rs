@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use alloc::{boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
 
 use jxl_frame::{
     FrameParser,
@@ -41,7 +41,7 @@ pub(super) async fn render<S: Sample>(
     }
     let lf_global = Arc::new(cache.lf_global.take().unwrap());
     let mut hf_global = cache.hf_global.take().map(Arc::new);
-    let mut lf_groups = Arc::new(std::mem::take(&mut cache.lf_groups));
+    let mut lf_groups = Arc::new(core::mem::take(&mut cache.lf_groups));
     let result = render_inner(
         frame,
         lf_frame,
@@ -66,7 +66,7 @@ async fn render_inner<S: Sample>(
     lf_frame: Option<&Reference>,
     lf_global: &Arc<LfGlobal<S>>,
     hf_global: &mut Option<Arc<HfGlobal>>,
-    lf_groups: &mut Arc<HashMap<u32, LfGroup<S>>>,
+    lf_groups: &mut Arc<BTreeMap<u32, LfGroup<S>>>,
     region: Region,
     parser: &mut FrameParser,
     tasks: &Tasks,
@@ -76,7 +76,7 @@ async fn render_inner<S: Sample>(
     let jpeg_upsampling = frame_header.jpeg_upsampling;
     let subsampled = jpeg_upsampling.into_iter().any(|x| x != 0);
     let shifts_cbycr: [_; 3] =
-        std::array::from_fn(|idx| ChannelShift::from_jpeg_upsampling(jpeg_upsampling, idx));
+        core::array::from_fn(|idx| ChannelShift::from_jpeg_upsampling(jpeg_upsampling, idx));
     if lf_frame.is_some() && lf_global.gmodular.is_partial() {
         return Err(Error::IncompleteFrame);
     }
@@ -364,7 +364,7 @@ fn decode_group<S: Sample>(
     frame: &IndexedFrame,
     lf_global: &LfGlobal<S>,
     hf_global: &HfGlobal,
-    lf_groups: &HashMap<u32, LfGroup<S>>,
+    lf_groups: &BTreeMap<u32, LfGroup<S>>,
     group: &mut CoefficientGroup,
     pass_idx: u32,
     modular: Option<TransformedModularSubimage<S>>,
@@ -415,7 +415,7 @@ fn reconstruct_group<S: Sample>(
     frame: &IndexedFrame,
     lf_global: &LfGlobal<S>,
     hf_global: Option<&HfGlobal>,
-    lf_groups: &HashMap<u32, LfGroup<S>>,
+    lf_groups: &BTreeMap<u32, LfGroup<S>>,
     lf_xyb: &ImageWithRegion,
     group: &mut CoefficientGroup,
     aligned_region: Region,

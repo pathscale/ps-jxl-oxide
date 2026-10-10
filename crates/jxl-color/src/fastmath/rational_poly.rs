@@ -8,11 +8,11 @@ pub fn eval_generic<const P: usize, const Q: usize>(x: f32, p: [f32; P], q: [f32
 #[cfg(target_arch = "x86_64")]
 #[inline]
 pub fn eval_x86_64_sse2<const P: usize, const Q: usize>(
-    x: std::arch::x86_64::__m128,
+    x: core::arch::x86_64::__m128,
     p: [f32; P],
     q: [f32; Q],
-) -> std::arch::x86_64::__m128 {
-    use std::arch::x86_64::*;
+) -> core::arch::x86_64::__m128 {
+    use core::arch::x86_64::*;
 
     unsafe {
         let yp = p
@@ -35,11 +35,11 @@ pub fn eval_x86_64_sse2<const P: usize, const Q: usize>(
 #[target_feature(enable = "fma")]
 #[inline]
 pub unsafe fn eval_x86_64_fma<const P: usize, const Q: usize>(
-    x: std::arch::x86_64::__m128,
+    x: core::arch::x86_64::__m128,
     p: [f32; P],
     q: [f32; Q],
-) -> std::arch::x86_64::__m128 {
-    use std::arch::x86_64::*;
+) -> core::arch::x86_64::__m128 {
+    use core::arch::x86_64::*;
 
     let yp = p
         .into_iter()
@@ -61,11 +61,11 @@ pub unsafe fn eval_x86_64_fma<const P: usize, const Q: usize>(
 #[target_feature(enable = "fma")]
 #[inline]
 pub unsafe fn eval_x86_64_avx2<const P: usize, const Q: usize>(
-    x: std::arch::x86_64::__m256,
+    x: core::arch::x86_64::__m256,
     p: [f32; P],
     q: [f32; Q],
-) -> std::arch::x86_64::__m256 {
-    use std::arch::x86_64::*;
+) -> core::arch::x86_64::__m256 {
+    use core::arch::x86_64::*;
 
     let yp = p
         .into_iter()
@@ -86,11 +86,11 @@ pub unsafe fn eval_x86_64_avx2<const P: usize, const Q: usize>(
 #[target_feature(enable = "neon")]
 #[inline]
 pub unsafe fn eval_aarch64_neon<const P: usize, const Q: usize>(
-    x: std::arch::aarch64::float32x4_t,
+    x: core::arch::aarch64::float32x4_t,
     p: [f32; P],
     q: [f32; Q],
-) -> std::arch::aarch64::float32x4_t {
-    use std::arch::aarch64::*;
+) -> core::arch::aarch64::float32x4_t {
+    use core::arch::aarch64::*;
 
     let yp = p
         .into_iter()

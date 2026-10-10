@@ -12,42 +12,63 @@ version = "0.12.6"
 edition = "2024"
 
 [dependencies]
-brotli-decompressor.workspace = true
-tracing.workspace = true
+brotli-decompressor = { version = "5.0.0", default-features = false }
+tracing = { version = "0.1.40", default-features = false }
 
 [dependencies.jxl-bitstream]
 version = "1.1.0"
 path = "../jxl-bitstream"
+default-features = false
 
 [dependencies.jxl-color]
 version = "0.11.0"
 path = "../jxl-color"
+default-features = false
 
 [dependencies.jxl-frame]
 version = "0.13.3"
 path = "../jxl-frame"
+default-features = false
 
 [dependencies.jxl-grid]
 version = "0.6.2"
 path = "../jxl-grid"
+default-features = false
 
 [dependencies.jxl-image]
 version = "0.13.0"
 path = "../jxl-image"
+default-features = false
 
 [dependencies.jxl-oxide-common]
 version = "1.0.0"
 path = "../jxl-oxide-common"
+default-features = false
 
 [dependencies.jxl-render]
 version = "0.12.4"
 path = "../jxl-render"
+default-features = false
+features = ["libm"]
 
 [dependencies.jxl-threadpool]
 version = "1.0.0"
 path = "../jxl-threadpool"
+default-features = false
 
 [features]
-default = []
+default = ["std"]
+std = [
+    "tracing/std",
+    "brotli-decompressor/std",
+    "jxl-bitstream/std",
+    "jxl-color/std",
+    "jxl-frame/std",
+    "jxl-grid/std",
+    "jxl-image/std",
+    "jxl-oxide-common/std",
+    "jxl-render/std",
+    "jxl-threadpool/std",
+]
 nagoya = ["jxl-threadpool/nagoya"]
 

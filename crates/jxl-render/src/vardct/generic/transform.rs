@@ -161,7 +161,7 @@ pub(crate) fn transform_afv<const N: usize>(coeff: &mut MutableSubgrid<'_>) {
     let mut samples_afv = [0.0f32; 16];
     for (coeff, basis) in coeff_afv.into_iter().zip(AFV_BASIS) {
         for (sample, basis) in samples_afv.iter_mut().zip(basis) {
-            *sample = coeff.mul_add(basis, *sample);
+            *sample = crate::math::mul_add(coeff, basis, *sample);
         }
     }
 

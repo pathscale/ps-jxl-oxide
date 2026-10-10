@@ -79,7 +79,7 @@ pub fn decode_pass_group<S: Sample>(
         );
         let lf_quant: Option<[_; 3]> = lf_group.lf_coeff.as_ref().map(|lf_coeff| {
             let lf_quant_channels = lf_coeff.lf_quant.image().unwrap().image_channels();
-            std::array::from_fn(|idx| {
+            core::array::from_fn(|idx| {
                 let lf_quant = &lf_quant_channels[[1, 0, 2][idx]];
                 let shift = ChannelShift::from_jpeg_upsampling(jpeg_upsampling, idx);
 

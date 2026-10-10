@@ -1,4 +1,5 @@
-use std::{num::Wrapping, sync::Arc};
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
+use core::num::Wrapping;
 
 use jxl_frame::{FrameHeader, data::NoiseParameters};
 use jxl_grid::{AlignedGrid, AllocTracker, SharedSubgrid};
@@ -152,7 +153,7 @@ async fn init_noise(
         jobs.push(Box::new(move || {
             for (channel_idx, output) in output.iter_mut().enumerate() {
                 // `adjacent_groups[4] == this`
-                let adjacent_groups: [_; 9] = std::array::from_fn(|idx| {
+                let adjacent_groups: [_; 9] = core::array::from_fn(|idx| {
                     let offset_x = (idx % 3) as isize - 1;
                     let offset_y = (idx / 3) as isize - 1;
                     if let (Some(x), Some(y)) = (
@@ -220,7 +221,7 @@ impl NoiseGroup {
         let alloc_handle = tracker
             .map(|tracker| tracker.alloc::<f32>(elems))
             .transpose()?;
-        let buf = std::array::from_fn(|_| Vec::with_capacity(stride * height));
+        let buf = core::array::from_fn(|_| Vec::with_capacity(stride * height));
 
         Ok(Self {
             buf,
@@ -448,7 +449,7 @@ impl XorShift128Plus {
 
     #[inline]
     fn fill_batch(&mut self) -> [u64; N] {
-        std::array::from_fn(|i| {
+        core::array::from_fn(|i| {
             let mut s1 = self.s0[i];
             let s0 = self.s1[i];
             let ret = (s1 + s0).0;
