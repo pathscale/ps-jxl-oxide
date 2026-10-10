@@ -185,10 +185,13 @@ impl Bundle<&crate::FrameHeader> for Toc {
         let entry_count = if num_groups == 1 && num_passes == 1 {
             1
         } else {
-            num_groups.checked_mul(num_passes)
+            num_groups
+                .checked_mul(num_passes)
                 .and_then(|count| count.checked_add(ctx.num_lf_groups()))
                 .and_then(|count| count.checked_add(2))
-                .ok_or(jxl_bitstream::Error::ValidationFailed("TOC entry count overflow"))?
+                .ok_or(jxl_bitstream::Error::ValidationFailed(
+                    "TOC entry count overflow",
+                ))?
         };
 
         if entry_count > 65536 {
@@ -220,11 +223,18 @@ impl Bundle<&crate::FrameHeader> for Toc {
             offsets.push(acc);
             let size = usize::try_from(size)
                 .map_err(|_| jxl_bitstream::Error::ValidationFailed("TOC size overflow"))?;
-            acc = acc.checked_add(size)
+            acc = acc
+                .checked_add(size)
                 .filter(|end| end.checked_mul(8).is_some())
-                .ok_or(jxl_bitstream::Error::ValidationFailed("TOC offset overflow"))?;
-            total_size = total_size.checked_add(size)
-                .ok_or(jxl_bitstream::Error::ValidationFailed("TOC total size overflow"))?;
+                .ok_or(jxl_bitstream::Error::ValidationFailed(
+                    "TOC offset overflow",
+                ))?;
+            total_size =
+                total_size
+                    .checked_add(size)
+                    .ok_or(jxl_bitstream::Error::ValidationFailed(
+                        "TOC total size overflow",
+                    ))?;
         }
 
         let section_kinds = if entry_count == 1 {
@@ -290,4 +300,3 @@ impl Bundle<&crate::FrameHeader> for Toc {
         })
     }
 }
-
