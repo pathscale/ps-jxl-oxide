@@ -1,15 +1,24 @@
-# jxl-oxide
-[![crates.io](https://img.shields.io/crates/v/jxl-oxide.svg)](https://crates.io/crates/jxl-oxide)
-[![docs.rs](https://docs.rs/jxl-oxide/badge.svg)](https://docs.rs/crate/jxl-oxide/)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/tirr-c/jxl-oxide/build.yml?branch=main)](https://github.com/tirr-c/jxl-oxide/actions/workflows/build.yml?query=branch%3Amain)
+# ps-jxl-oxide
 
-A spec-conforming JPEG XL decoder written in pure Rust.
+A spec-conforming JPEG XL decoder in pure Rust: the pathscale fork of
+[tirr-c/jxl-oxide](https://github.com/tirr-c/jxl-oxide) by Wonwoo Choi and contributors, imported at upstream
+commit c0cc4c7. It serves pathscale's PDF toolkit and the chuzz browser, so animation, extra channels and alpha,
+ICC output, orientation and cropping stay.
 
-This is the pathscale fork of [tirr-c/jxl-oxide](https://github.com/tirr-c/jxl-oxide), originally developed by Wonwoo Choi and upstream contributors. This stage removes Rayon pools, JPEG bitstream reconstruction, filesystem convenience APIs, `image` integration, and the bundled lcms2 and moxcms adapters. Decode work runs inline through the existing dispatch wrapper; JPEG-transcoded VarDCT pixel decoding, animation and frames, extra channels and alpha, ICC output, orientation, cropping, built-in colour conversion, and the caller-supplied `ColorManagementSystem` boundary remain available. Input still uses `read(impl std::io::Read)` or byte feeding. Later stages will introduce immutable `Arc` inputs, owned task outputs, a nagoya-native asynchronous coordinator, and `no_std + alloc`; crate names remain unchanged in this stage.
+Removed so far: the Rayon pool (decode work runs inline through the existing dispatch wrapper), JPEG bitstream
+reconstruction, filesystem convenience APIs, the `image` integration, and the lcms2 and moxcms adapters (colour
+management plugs in through the `ColorManagementSystem` trait).
 
----
+Plan: zero-copy input over `Arc<[u8]>` ranges; owned task outputs with an asynchronous coordinator run by
+[nagoya](https://github.com/pathscale/nagoya) instead of a thread pool; then `no_std + alloc`.
 
-Dual-licensed under MIT and Apache 2.0.
+`tools/ps-jxl-check` decodes the [libjxl conformance suite][conformance] and compares every frame against the
+reference images with the suite's tolerances; it also reports milliseconds per decode. Every stage keeps it green.
+
+```bash
+cargo run --release -p ps-jxl-check -- path/to/conformance
+```
+
+Dual-licensed under MIT and Apache 2.0, as upstream.
 
 [conformance]: https://github.com/libjxl/conformance
-
