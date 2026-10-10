@@ -466,13 +466,17 @@ impl ImageWithRegion {
         Ok(())
     }
 
-    pub(crate) fn upsample_nonseparable(
+    pub(crate) async fn upsample_nonseparable(
         &mut self,
         image_header: &ImageHeader,
         frame_header: &FrameHeader,
         upsampled_valid_region: Region,
         ec_to_color_only: bool,
+        tasks: &jxl_threadpool::Tasks,
     ) -> Result<()> {
+        use std::sync::Arc;
+        use tracing::Instrument;
+
         if frame_header.upsampling != 1 && self.buffer[0].as_float().is_none() {
             debug_assert!(!image_header.metadata.xyb_encoded);
         }
@@ -509,29 +513,41 @@ impl ImageWithRegion {
             let width = downsampled_valid_region.width;
             let height = downsampled_valid_region.height;
 
-            let subgrid = grid.as_subgrid().subgrid(
-                left as usize..(left + width) as usize,
-                top as usize..(top + height) as usize,
+            let source = Arc::new(std::mem::replace(grid, AlignedGrid::empty()));
+            let input = crate::features::UpsamplingInput::new(
+                Arc::clone(&source),
+                left as usize,
+                top as usize,
+                width as usize,
+                height as usize,
             );
-            *region = downsampled_valid_region;
-            let out = tracing::trace_span!(
+            let mut out_region = downsampled_valid_region;
+            let span = tracing::trace_span!(
                 "Non-separable upsampling",
                 channel_idx = idx,
                 upsampling_factor,
                 target_factor
+            );
+            let out = crate::features::upsample(
+                input,
+                &mut out_region,
+                image_header,
+                upsampling_factor - target_factor,
+                tracker.as_ref(),
+                tasks,
             )
-            .in_scope(|| {
-                crate::features::upsample(
-                    subgrid,
-                    region,
-                    image_header,
-                    upsampling_factor - target_factor,
-                    tracker.as_ref(),
-                )
-            })?;
-            if let Some(out) = out {
+            .instrument(span)
+            .await;
+            if !matches!(&out, Ok(Some(_))) {
+                *g = ImageBuffer::F32(
+                    Arc::try_unwrap(source)
+                        .expect("upsampling source still shared after task completion"),
+                );
+            }
+            if let Some(out) = out? {
                 *g = ImageBuffer::F32(out);
             }
+            *region = out_region;
             *shift = ChannelShift::from_shift(target_factor);
         }
 

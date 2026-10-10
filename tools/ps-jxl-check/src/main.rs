@@ -38,6 +38,8 @@ struct Arguments {
     hash: bool,
     /// Decode on a nagoya runtime with this many workers.
     workers: Option<usize>,
+    /// Decode each case this many times and report the fastest run.
+    repeat: usize,
 }
 
 #[derive(Default)]
@@ -105,6 +107,7 @@ fn arguments() -> CheckResult<Option<Arguments>> {
     let mut chunk = None;
     let mut hash = false;
     let mut workers = None;
+    let mut repeat = 1;
     let mut positional = false;
     while let Some(arg) = args.next() {
         if !positional {
@@ -141,6 +144,15 @@ fn arguments() -> CheckResult<Option<Arguments>> {
                     chunk = Some(size);
                     continue;
                 }
+                Some("--repeat") => {
+                    repeat = args
+                        .next()
+                        .and_then(|value| value.into_string().ok())
+                        .and_then(|value| value.parse::<usize>().ok())
+                        .filter(|count| *count > 0)
+                        .ok_or_else(|| "--repeat requires a positive count".to_owned())?;
+                    continue;
+                }
                 Some("--workers") => {
                     let count = args
                         .next()
@@ -168,6 +180,7 @@ fn arguments() -> CheckResult<Option<Arguments>> {
         chunk,
         hash,
         workers,
+        repeat,
     }))
 }
 
@@ -433,10 +446,20 @@ fn execute(args: &Arguments) -> CheckResult<bool> {
             continue;
         }
         let mut report = Report::default();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_case(&directory, args.chunk, &mut report)
-        }));
-        let result = result.unwrap_or_else(|_| Err("checker or decoder panicked".to_owned()));
+        let mut fastest = f64::INFINITY;
+        let mut result = Ok(());
+        for _ in 0..args.repeat {
+            report = Report::default();
+            result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_case(&directory, args.chunk, &mut report)
+            }))
+            .unwrap_or_else(|_| Err("checker or decoder panicked".to_owned()));
+            fastest = fastest.min(report.milliseconds);
+            if result.is_err() {
+                break;
+            }
+        }
+        report.milliseconds = fastest;
         report.print(&name, result.is_ok());
         match result {
             Ok(()) => passed += 1,
@@ -471,7 +494,7 @@ fn install_executor(workers: Option<usize>) -> CheckResult<()> {
 fn main() -> ExitCode {
     let result = match arguments() {
         Ok(None) => {
-            println!("Usage: ps-jxl-check <conformance-directory> [--only <name>] [--hash] [--chunk <bytes>] [--workers <count>]");
+            println!("Usage: ps-jxl-check <conformance-directory> [--only <name>] [--hash] [--chunk <bytes>] [--workers <count>] [--repeat <count>]");
             return ExitCode::SUCCESS;
         }
         Ok(Some(args)) => install_executor(args.workers).and_then(|()| execute(&args)),

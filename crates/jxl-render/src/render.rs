@@ -124,7 +124,14 @@ pub(crate) async fn render_frame<S: Sample>(
     )
     .await?;
 
-    fb.upsample_nonseparable(image_header, frame_header, upsampling_valid_region, false)?;
+    fb.upsample_nonseparable(
+        image_header,
+        frame_header,
+        upsampling_valid_region,
+        false,
+        tasks,
+    )
+    .await?;
 
     if !frame_header.save_before_ct && !frame_header.is_last {
         util::convert_color_for_record(image_header, frame_header.do_ycbcr, &mut fb, tasks).await?;
@@ -158,7 +165,14 @@ async fn render_features<S: Sample>(
     });
 
     if let Some(patches) = &lf_global.patches {
-        grid.upsample_nonseparable(image_header, frame_header, upsampling_valid_region, true)?;
+        grid.upsample_nonseparable(
+            image_header,
+            frame_header,
+            upsampling_valid_region,
+            true,
+            tasks,
+        )
+        .await?;
 
         for patch in &patches.patches {
             let Some(ref_grid) = &reference_grids[patch.ref_idx as usize] else {
