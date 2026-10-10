@@ -45,9 +45,20 @@ mod generic;
 )))]
 use generic as impls;
 
-pub(crate) fn render_vardct<S: Sample>(
+pub(crate) async fn render_vardct<S: Sample>(
     frame: &IndexedFrame,
-    lf_frame: Option<&Reference<S>>,
+    lf_frame: Option<&Reference>,
+    cache: &mut RenderCache<S>,
+    region: Region,
+    pool: &JxlThreadPool,
+    _tasks: &jxl_threadpool::Tasks,
+) -> Result<ImageWithRegion> {
+    render_vardct_inline(frame, lf_frame, cache, region, pool)
+}
+
+fn render_vardct_inline<S: Sample>(
+    frame: &IndexedFrame,
+    lf_frame: Option<&Reference>,
     cache: &mut RenderCache<S>,
     region: Region,
     pool: &JxlThreadPool,
@@ -177,8 +188,7 @@ pub(crate) fn render_vardct<S: Sample>(
 
         let lf_xyb = if let Some(x) = lf_frame {
             tracing::trace_span!("Copy LFQuant").in_scope(|| -> Result<_> {
-                let lf_frame = std::sync::Arc::clone(&x.image).run_with_image()?;
-                let lf_frame = lf_frame.blend(None, pool)?.try_clone()?;
+                let lf_frame = x.image.try_clone()?;
                 Ok(lf_frame)
             })?
         } else {

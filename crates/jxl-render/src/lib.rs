@@ -1,19 +1,20 @@
 //! This crate is the core of jxl-oxide that provides JPEG XL renderer.
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use jxl_bitstream::Bitstream;
 use jxl_color::{
     ColorEncodingWithProfile, ColorManagementSystem, ColorTransform, ColourEncoding, ColourSpace,
     EnumColourEncoding, RenderingIntent, TransferFunction,
 };
-use jxl_frame::{Frame, FrameContext, header::FrameType};
+use jxl_frame::{Frame, FrameContext};
 use jxl_grid::AllocTracker;
 use jxl_image::{ImageHeader, ImageMetadata};
-use jxl_modular::Sample;
+
 use jxl_oxide_common::Bundle;
 use jxl_threadpool::JxlThreadPool;
 
 mod blend;
+mod coordinator;
 mod error;
 mod features;
 mod filter;
@@ -37,15 +38,16 @@ pub struct RenderContext {
     pool: JxlThreadPool,
     tracker: Option<AllocTracker>,
     pub(crate) frames: Vec<Arc<IndexedFrame>>,
-    pub(crate) renders_wide: Vec<Arc<FrameRenderHandle<i32>>>,
-    pub(crate) renders_narrow: Vec<Arc<FrameRenderHandle<i16>>>,
+    pub(crate) renders_wide: Vec<Option<RenderCache<i32>>>,
+    pub(crate) renders_narrow: Vec<Option<RenderCache<i16>>>,
+    pub(crate) rendered_frames: Vec<Option<Arc<ImageWithRegion>>>,
     pub(crate) keyframes: Vec<usize>,
     pub(crate) keyframe_in_progress: Option<usize>,
     pub(crate) refcounts: Vec<usize>,
     pub(crate) frame_deps: Vec<FrameDependence>,
     pub(crate) lf_frame: [usize; 4],
     pub(crate) reference: [usize; 4],
-    pub(crate) loading_frame: Option<IndexedFrame>,
+    pub(crate) loading_frame: Option<Arc<IndexedFrame>>,
     pub(crate) loading_render_cache_wide: Option<RenderCache<i32>>,
     pub(crate) loading_render_cache_narrow: Option<RenderCache<i16>>,
     pub(crate) loading_region: Option<Region>,
@@ -53,7 +55,7 @@ pub struct RenderContext {
     embedded_icc: Vec<u8>,
     requested_color_encoding: ColorEncodingWithProfile,
     cms: Box<dyn ColorManagementSystem + Send + Sync>,
-    cached_transform: Mutex<Option<ColorTransform>>,
+    cached_transform: Option<Arc<ColorTransform>>,
     force_wide_buffers: bool,
 }
 
@@ -168,6 +170,7 @@ impl RenderContextBuilder {
             frames: Vec::new(),
             renders_wide: Vec::new(),
             renders_narrow: Vec::new(),
+            rendered_frames: Vec::new(),
             keyframes: Vec::new(),
             keyframe_in_progress: None,
             refcounts: Vec::new(),
@@ -182,7 +185,7 @@ impl RenderContextBuilder {
             embedded_icc: self.embedded_icc,
             requested_color_encoding,
             cms: Box::new(jxl_color::NullCms),
-            cached_transform: Mutex::new(None),
+            cached_transform: None,
             force_wide_buffers: self.force_wide_buffers,
         })
     }
@@ -198,7 +201,7 @@ impl RenderContext {
 impl RenderContext {
     #[inline]
     pub fn set_cms(&mut self, cms: impl ColorManagementSystem + Send + Sync + 'static) {
-        *self.cached_transform.get_mut().unwrap() = None;
+        self.cached_transform = None;
         self.cms = Box::new(cms);
     }
 
@@ -219,7 +222,7 @@ impl RenderContext {
 
     #[inline]
     pub fn request_color_encoding(&mut self, encoding: ColorEncodingWithProfile) {
-        *self.cached_transform.get_mut().unwrap() = None;
+        self.cached_transform = None;
         self.requested_color_encoding = encoding;
     }
 
@@ -326,66 +329,9 @@ impl RenderContext {
             self.keyframe_in_progress = Some(idx);
         }
 
-        let frame = Arc::new(frame);
-        let image_region = self.requested_image_region;
-
-        if self.narrow_modular() {
-            let reference_frames = ReferenceFrames {
-                lf: (deps.lf != usize::MAX).then(|| Reference {
-                    frame: Arc::clone(&self.frames[deps.lf]),
-                    image: Arc::clone(&self.renders_narrow[deps.lf]),
-                }),
-                refs: deps.ref_slots.map(|r| {
-                    (r != usize::MAX).then(|| Reference {
-                        frame: Arc::clone(&self.frames[r]),
-                        image: Arc::clone(&self.renders_narrow[r]),
-                    })
-                }),
-            };
-            let refs = reference_frames.refs.clone();
-
-            let render_op = self.render_op::<i16>(Arc::clone(&frame), reference_frames);
-            let handle = if let Some(cache) = self.loading_render_cache_narrow.take() {
-                FrameRenderHandle::from_cache(
-                    Arc::clone(&frame),
-                    image_region,
-                    cache,
-                    render_op,
-                    refs,
-                )
-            } else {
-                FrameRenderHandle::new(Arc::clone(&frame), image_region, render_op, refs)
-            };
-            self.renders_narrow.push(Arc::new(handle));
-        } else {
-            let reference_frames = ReferenceFrames {
-                lf: (deps.lf != usize::MAX).then(|| Reference {
-                    frame: Arc::clone(&self.frames[deps.lf]),
-                    image: Arc::clone(&self.renders_wide[deps.lf]),
-                }),
-                refs: deps.ref_slots.map(|r| {
-                    (r != usize::MAX).then(|| Reference {
-                        frame: Arc::clone(&self.frames[r]),
-                        image: Arc::clone(&self.renders_wide[r]),
-                    })
-                }),
-            };
-            let refs = reference_frames.refs.clone();
-
-            let render_op = self.render_op::<i32>(Arc::clone(&frame), reference_frames);
-            let handle = if let Some(cache) = self.loading_render_cache_wide.take() {
-                FrameRenderHandle::from_cache(
-                    Arc::clone(&frame),
-                    image_region,
-                    cache,
-                    render_op,
-                    refs,
-                )
-            } else {
-                FrameRenderHandle::new(Arc::clone(&frame), image_region, render_op, refs)
-            };
-            self.renders_wide.push(Arc::new(handle));
-        }
+        self.renders_narrow.push(self.loading_render_cache_narrow.take());
+        self.renders_wide.push(self.loading_render_cache_wide.take());
+        self.rendered_frames.push(None);
 
         self.frames.push(Arc::clone(&frame));
         self.frame_deps.push(deps);
@@ -399,7 +345,7 @@ impl RenderContext {
         self.frames[search_from..]
             .iter()
             .map(|r| &**r)
-            .chain(self.loading_frame.as_ref())
+            .chain(self.loading_frame.as_deref())
             .rev()
             .find(|x| x.header().frame_type.is_progressive_frame())
     }
@@ -435,13 +381,13 @@ impl RenderContext {
             return Err(Error::UninitializedLfFrame(header.lf_level));
         }
 
-        self.loading_frame = Some(IndexedFrame::new(frame, self.frames.len()));
-        Ok(self.loading_frame.as_mut().unwrap())
+        self.loading_frame = Some(Arc::new(IndexedFrame::new(frame, self.frames.len())));
+        Ok(Arc::get_mut(self.loading_frame.as_mut().unwrap()).unwrap())
     }
 
     pub fn current_loading_frame(&mut self) -> Option<&mut IndexedFrame> {
         self.try_finalize_current_frame();
-        self.loading_frame.as_mut()
+        self.loading_frame.as_mut().and_then(Arc::get_mut)
     }
 
     pub fn finalize_current_frame(&mut self) {
@@ -477,7 +423,7 @@ impl RenderContext {
     #[inline]
     pub fn frame(&self, frame_idx: usize) -> Option<&IndexedFrame> {
         if self.frames.len() == frame_idx {
-            self.loading_frame.as_ref()
+            self.loading_frame.as_deref()
         } else {
             self.frames.get(frame_idx).map(|x| &**x)
         }
@@ -485,80 +431,6 @@ impl RenderContext {
 }
 
 impl RenderContext {
-    fn do_render<S: Sample>(
-        frame: &IndexedFrame,
-        reference_frames: &ReferenceFrames<S>,
-        mut state: FrameRender<S>,
-        image_region: Region,
-        prev_frame_visibility: (usize, usize),
-        pool: &JxlThreadPool,
-    ) -> FrameRender<S> {
-        if let Some(lf) = &reference_frames.lf {
-            tracing::trace!(idx = lf.frame.idx, "Spawn LF frame renderer");
-            let lf_handle = Arc::clone(&lf.image);
-            pool.spawn(move || {
-                lf_handle.run(image_region);
-            });
-        }
-        for grid in reference_frames.refs.iter().flatten() {
-            tracing::trace!(idx = grid.frame.idx, "Spawn reference frame renderer");
-            let ref_handle = Arc::clone(&grid.image);
-            pool.spawn(move || {
-                ref_handle.run(image_region);
-            });
-        }
-
-        let mut cache = match state {
-            FrameRender::InProgress(cache) => cache,
-            _ => {
-                state = FrameRender::InProgress(Box::new(RenderCache::new(frame)));
-                let FrameRender::InProgress(cache) = state else {
-                    unreachable!()
-                };
-                cache
-            }
-        };
-
-        let result = render::render_frame(
-            frame,
-            reference_frames.clone(),
-            &mut cache,
-            image_region,
-            pool.clone(),
-            prev_frame_visibility,
-        );
-        match result {
-            Ok(grid) => FrameRender::Done(grid),
-            Err(e) if e.unexpected_eof() || matches!(e, Error::IncompleteFrame) => {
-                if frame.is_loading_done() {
-                    FrameRender::Err(e)
-                } else {
-                    FrameRender::InProgress(cache)
-                }
-            }
-            Err(e) => FrameRender::Err(e),
-        }
-    }
-
-    fn render_op<S: Sample>(
-        &self,
-        frame: Arc<IndexedFrame>,
-        reference_frames: ReferenceFrames<S>,
-    ) -> RenderOp<S> {
-        let prev_frame_visibility = self.get_previous_frames_visibility(&frame);
-
-        let pool = self.pool.clone();
-        Arc::new(move |state, image_region| {
-            Self::do_render(
-                &frame,
-                &reference_frames,
-                state,
-                image_region,
-                prev_frame_visibility,
-                &pool,
-            )
-        })
-    }
 
     fn get_previous_frames_visibility<'a>(&'a self, frame: &'a IndexedFrame) -> (usize, usize) {
         let frame_idx = frame.index();
@@ -585,418 +457,6 @@ impl RenderContext {
     }
 }
 
-impl RenderContext {
-    fn spawn_renderer(&self, index: usize) {
-        if !self.pool.is_multithreaded() {
-            // Frame rendering will run immediately, this is not we want.
-            return;
-        }
-
-        let image_region = self.requested_image_region;
-        if self.narrow_modular() {
-            let render_handle = Arc::clone(&self.renders_narrow[index]);
-            self.pool.spawn(move || {
-                render_handle.run(image_region);
-            });
-        } else {
-            let render_handle = Arc::clone(&self.renders_wide[index]);
-            self.pool.spawn(move || {
-                render_handle.run(image_region);
-            });
-        }
-    }
-
-    fn render_by_index(&self, index: usize) -> Result<Arc<ImageWithRegion>> {
-        if self.narrow_modular() {
-            Arc::clone(&self.renders_narrow[index])
-                .run_with_image()?
-                .blend(None, &self.pool)
-        } else {
-            Arc::clone(&self.renders_wide[index])
-                .run_with_image()?
-                .blend(None, &self.pool)
-        }
-    }
-
-    /// Renders the first keyframe.
-    ///
-    /// The keyframe should be loaded in prior to rendering, with one of the loading methods.
-    #[inline]
-    pub fn render(&mut self) -> Result<Arc<ImageWithRegion>> {
-        self.render_keyframe(0)
-    }
-
-    /// Renders the keyframe.
-    ///
-    /// The keyframe should be loaded in prior to rendering, with one of the loading methods.
-    pub fn render_keyframe(&self, keyframe_idx: usize) -> Result<Arc<ImageWithRegion>> {
-        let idx = *self
-            .keyframes
-            .get(keyframe_idx)
-            .ok_or(Error::IncompleteFrame)?;
-        let grid = self.render_by_index(idx)?;
-        let frame = &*self.frames[idx];
-
-        self.postprocess_keyframe(frame, grid)
-    }
-
-    pub fn render_loading_keyframe(&mut self) -> Result<(&IndexedFrame, Arc<ImageWithRegion>)> {
-        let mut current_frame_grid = None;
-        if self.loading_frame().is_some() {
-            let ret = self.render_loading_frame();
-            match ret {
-                Ok(grid) => current_frame_grid = Some(grid),
-                Err(Error::IncompleteFrame) => {}
-                Err(e) => return Err(e),
-            }
-        }
-
-        let (frame, grid) = if let Some(grid) = current_frame_grid {
-            let frame = self.loading_frame().unwrap();
-            (frame, Arc::new(grid))
-        } else if let Some(idx) = self.keyframe_in_progress {
-            let grid = self.render_by_index(idx)?;
-            let frame = &*self.frames[idx];
-            (frame, grid)
-        } else {
-            return Err(Error::IncompleteFrame);
-        };
-
-        let grid = self.postprocess_keyframe(frame, grid)?;
-        Ok((frame, grid))
-    }
-
-    pub fn reset_cache(&mut self) {
-        let image_region = self.requested_image_region;
-
-        self.loading_region = None;
-        self.loading_render_cache_wide = None;
-        self.loading_render_cache_narrow = None;
-        for (idx, frame) in self.frames.iter().enumerate() {
-            if frame.header().frame_type == FrameType::ReferenceOnly {
-                continue;
-            }
-
-            let deps = self.frame_deps[idx];
-            if self.narrow_modular() {
-                let reference_frames = ReferenceFrames {
-                    lf: (deps.lf != usize::MAX).then(|| Reference {
-                        frame: Arc::clone(&self.frames[deps.lf]),
-                        image: Arc::clone(&self.renders_narrow[deps.lf]),
-                    }),
-                    refs: deps.ref_slots.map(|r| {
-                        (r != usize::MAX).then(|| Reference {
-                            frame: Arc::clone(&self.frames[r]),
-                            image: Arc::clone(&self.renders_narrow[r]),
-                        })
-                    }),
-                };
-                let refs = reference_frames.refs.clone();
-
-                let render_op = self.render_op::<i16>(Arc::clone(frame), reference_frames);
-                let handle =
-                    FrameRenderHandle::new(Arc::clone(frame), image_region, render_op, refs);
-                self.renders_narrow[idx] = Arc::new(handle);
-            } else {
-                let reference_frames = ReferenceFrames {
-                    lf: (deps.lf != usize::MAX).then(|| Reference {
-                        frame: Arc::clone(&self.frames[deps.lf]),
-                        image: Arc::clone(&self.renders_wide[deps.lf]),
-                    }),
-                    refs: deps.ref_slots.map(|r| {
-                        (r != usize::MAX).then(|| Reference {
-                            frame: Arc::clone(&self.frames[r]),
-                            image: Arc::clone(&self.renders_wide[r]),
-                        })
-                    }),
-                };
-                let refs = reference_frames.refs.clone();
-
-                let render_op = self.render_op::<i32>(Arc::clone(frame), reference_frames);
-                let handle =
-                    FrameRenderHandle::new(Arc::clone(frame), image_region, render_op, refs);
-                self.renders_wide[idx] = Arc::new(handle);
-            }
-        }
-    }
-
-    fn render_loading_frame(&mut self) -> Result<ImageWithRegion> {
-        let frame = self.loading_frame().unwrap();
-        if !frame.header().frame_type.is_progressive_frame() {
-            return Err(Error::IncompleteFrame);
-        }
-
-        let image_region = self.requested_image_region;
-        let frame_region = util::image_region_to_frame(frame, image_region, false);
-        self.loading_region = Some(frame_region);
-
-        let frame = self.loading_frame().unwrap();
-        let header = frame.header();
-        let lf_global_failed = if self.narrow_modular() {
-            frame.try_parse_lf_global::<i16>().is_none()
-        } else {
-            frame.try_parse_lf_global::<i32>().is_none()
-        };
-        if lf_global_failed {
-            return Err(Error::IncompleteFrame);
-        }
-
-        let lf_frame_idx = self.lf_frame[header.lf_level as usize];
-        if header.flags.use_lf_frame() {
-            self.spawn_renderer(lf_frame_idx);
-        }
-        for idx in self.reference {
-            if idx != usize::MAX {
-                self.spawn_renderer(idx);
-            }
-        }
-
-        tracing::debug!(?image_region, ?frame_region, "Rendering loading frame");
-        let image = if self.narrow_modular() {
-            let state = if let Some(cache) = self.loading_render_cache_narrow.take() {
-                FrameRender::InProgress(Box::new(cache))
-            } else {
-                FrameRender::None
-            };
-
-            let reference_frames = ReferenceFrames {
-                lf: (lf_frame_idx != usize::MAX).then(|| Reference {
-                    frame: Arc::clone(&self.frames[lf_frame_idx]),
-                    image: Arc::clone(&self.renders_narrow[lf_frame_idx]),
-                }),
-                refs: self.reference.map(|r| {
-                    (r != usize::MAX).then(|| Reference {
-                        frame: Arc::clone(&self.frames[r]),
-                        image: Arc::clone(&self.renders_narrow[r]),
-                    })
-                }),
-            };
-
-            let frame = self.loading_frame().unwrap();
-            let prev_frame_visibility = self.get_previous_frames_visibility(frame);
-
-            let state = Self::do_render(
-                frame,
-                &reference_frames,
-                state,
-                image_region,
-                prev_frame_visibility,
-                &self.pool,
-            );
-
-            match state {
-                FrameRender::InProgress(cache) => {
-                    self.loading_render_cache_narrow = Some(*cache);
-                    return Err(Error::IncompleteFrame);
-                }
-                FrameRender::Err(e) => {
-                    return Err(e);
-                }
-                FrameRender::Done(mut image) => {
-                    let skip_composition =
-                        image::composite_preprocess(frame, &mut image, &self.pool)?;
-
-                    if !skip_composition {
-                        let oriented_image_region = util::apply_orientation_to_image_region(
-                            &self.image_header,
-                            image_region,
-                        );
-                        image::composite(
-                            frame,
-                            &mut image,
-                            reference_frames.refs,
-                            oriented_image_region,
-                            &self.pool,
-                        )?;
-                    }
-
-                    image
-                }
-                _ => todo!(),
-            }
-        } else {
-            let state = if let Some(cache) = self.loading_render_cache_wide.take() {
-                FrameRender::InProgress(Box::new(cache))
-            } else {
-                FrameRender::None
-            };
-
-            let reference_frames = ReferenceFrames {
-                lf: (lf_frame_idx != usize::MAX).then(|| Reference {
-                    frame: Arc::clone(&self.frames[lf_frame_idx]),
-                    image: Arc::clone(&self.renders_wide[lf_frame_idx]),
-                }),
-                refs: self.reference.map(|r| {
-                    (r != usize::MAX).then(|| Reference {
-                        frame: Arc::clone(&self.frames[r]),
-                        image: Arc::clone(&self.renders_wide[r]),
-                    })
-                }),
-            };
-
-            let frame = self.loading_frame().unwrap();
-            let prev_frame_visibility = self.get_previous_frames_visibility(frame);
-
-            let state = Self::do_render(
-                frame,
-                &reference_frames,
-                state,
-                image_region,
-                prev_frame_visibility,
-                &self.pool,
-            );
-
-            match state {
-                FrameRender::InProgress(cache) => {
-                    self.loading_render_cache_wide = Some(*cache);
-                    return Err(Error::IncompleteFrame);
-                }
-                FrameRender::Err(e) => {
-                    return Err(e);
-                }
-                FrameRender::Done(mut image) => {
-                    let skip_composition =
-                        image::composite_preprocess(frame, &mut image, &self.pool)?;
-
-                    if !skip_composition {
-                        let oriented_image_region = util::apply_orientation_to_image_region(
-                            &self.image_header,
-                            image_region,
-                        );
-                        image::composite(
-                            frame,
-                            &mut image,
-                            reference_frames.refs,
-                            oriented_image_region,
-                            &self.pool,
-                        )?;
-                    }
-
-                    image
-                }
-                _ => todo!(),
-            }
-        };
-
-        let frame = self.loading_frame().unwrap();
-        if frame.header().lf_level > 0 {
-            let mut render = image.upsample_lf(frame.header().lf_level)?;
-            render.fill_opaque_alpha(&self.image_header.metadata.ec_info);
-            Ok(render)
-        } else {
-            Ok(image)
-        }
-    }
-
-    fn cache_color_transform(&self) -> Result<()> {
-        let mut cached_transform = self.cached_transform.lock().unwrap();
-        if cached_transform.is_some() {
-            return Ok(());
-        }
-
-        let metadata = self.metadata();
-        let header_color_encoding = &metadata.colour_encoding;
-
-        let frame_color_encoding = if metadata.xyb_encoded {
-            ColorEncodingWithProfile::new(EnumColourEncoding::xyb(RenderingIntent::Perceptual))
-        } else if let ColourEncoding::Enum(encoding) = header_color_encoding {
-            ColorEncodingWithProfile::new(encoding.clone())
-        } else {
-            ColorEncodingWithProfile::with_icc(&self.embedded_icc)?
-        };
-        tracing::trace!(?frame_color_encoding);
-        tracing::trace!(requested_color_encoding = ?self.requested_color_encoding);
-
-        let mut transform = ColorTransform::builder();
-        transform.set_srgb_icc(!self.cms.supports_linear_tf());
-        transform.from_pq(self.suggested_hdr_tf() == Some(TransferFunction::Pq));
-        let transform = transform.build(
-            &frame_color_encoding,
-            &self.requested_color_encoding,
-            &metadata.opsin_inverse_matrix,
-            &metadata.tone_mapping,
-            &*self.cms,
-        )?;
-
-        *cached_transform = Some(transform);
-        Ok(())
-    }
-
-    fn postprocess_keyframe(
-        &self,
-        frame: &IndexedFrame,
-        grid: Arc<ImageWithRegion>,
-    ) -> Result<Arc<ImageWithRegion>> {
-        let frame_header = frame.header();
-        let metadata = self.metadata();
-
-        tracing::trace_span!("Transform to requested color encoding").in_scope(|| -> Result<_> {
-            if grid.ct_done() {
-                return Ok(grid);
-            }
-
-            self.cache_color_transform()?;
-
-            tracing::trace!(do_ycbcr = frame_header.do_ycbcr);
-
-            let transform = self.cached_transform.lock().unwrap();
-            let transform = transform.as_ref().unwrap();
-            if transform.is_noop() && !frame_header.do_ycbcr {
-                return Ok(grid);
-            }
-
-            let mut grid = grid.try_clone()?;
-
-            if frame_header.do_ycbcr {
-                grid.convert_modular_color(self.image_header.metadata.bit_depth)?;
-                let [cb, y, cr] = grid.as_color_floats_mut();
-                jxl_color::ycbcr_to_rgb([cb.buf_mut(), y.buf_mut(), cr.buf_mut()]);
-            }
-            if transform.is_noop() {
-                let output_channels = transform.output_channels();
-                grid.remove_color_channels(output_channels);
-                return Ok(Arc::new(grid));
-            }
-
-            let encoded_color_channels = frame_header.encoded_color_channels();
-            if encoded_color_channels < 3 {
-                grid.clone_gray()?;
-            }
-
-            grid.convert_modular_color(self.image_header.metadata.bit_depth)?;
-            let (color_channels, extra_channels) = grid.buffer_mut().split_at_mut(3);
-            let mut channels = Vec::new();
-            for grid in color_channels {
-                channels.push(grid.as_float_mut().unwrap().buf_mut());
-            }
-
-            let mut has_black = false;
-            for (grid, ec_info) in extra_channels.iter_mut().zip(&metadata.ec_info) {
-                if ec_info.is_black() {
-                    channels.push(grid.convert_to_float_modular(ec_info.bit_depth)?.buf_mut());
-                    has_black = true;
-                    break;
-                }
-            }
-
-            if has_black {
-                // 0 means full ink; invert samples
-                for grid in channels.iter_mut() {
-                    for v in &mut **grid {
-                        *v = 1.0 - *v;
-                    }
-                }
-            }
-
-            let output_channels = transform.run_with_threads(&mut channels, &self.pool)?;
-            if output_channels < 3 {
-                grid.remove_color_channels(output_channels);
-            }
-            grid.set_ct_done(true);
-            Ok(Arc::new(grid))
-        })
-    }
-}
 
 /// Frame with its index in the image.
 #[derive(Debug)]
@@ -1040,13 +500,13 @@ struct FrameDependence {
 }
 
 #[derive(Debug, Clone, Default)]
-struct ReferenceFrames<S: Sample> {
-    pub(crate) lf: Option<Reference<S>>,
-    pub(crate) refs: [Option<Reference<S>>; 4],
+struct ReferenceFrames {
+    pub(crate) lf: Option<Reference>,
+    pub(crate) refs: [Option<Reference>; 4],
 }
 
 #[derive(Debug, Clone)]
-struct Reference<S: Sample> {
+struct Reference {
     pub(crate) frame: Arc<IndexedFrame>,
-    pub(crate) image: Arc<FrameRenderHandle<S>>,
+    pub(crate) image: Arc<ImageWithRegion>,
 }

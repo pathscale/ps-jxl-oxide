@@ -1,4 +1,3 @@
-use std::sync::Arc;
 
 use jxl_frame::{
     Frame,
@@ -7,7 +6,7 @@ use jxl_frame::{
 };
 use jxl_grid::{AlignedGrid, MutableSubgrid, SharedSubgrid};
 use jxl_image::ImageHeader;
-use jxl_modular::Sample;
+
 use jxl_threadpool::JxlThreadPool;
 
 use crate::{ImageWithRegion, Reference, Region, Result, image::ImageBuffer};
@@ -176,13 +175,13 @@ fn source_and_alpha_from_blending_info(
     (source, alpha)
 }
 
-pub(crate) fn blend<S: Sample>(
+pub(crate) fn blend(
     image_header: &ImageHeader,
-    reference_grids: [Option<Reference<S>>; 4],
+    reference_grids: [Option<Reference>; 4],
     new_frame: &Frame,
     new_grid: &mut ImageWithRegion,
     output_frame_region: Region,
-    pool: &JxlThreadPool,
+    _pool: &JxlThreadPool,
 ) -> Result<ImageWithRegion> {
     let header = new_frame.header();
     let tracker = new_frame.alloc_tracker();
@@ -190,29 +189,6 @@ pub(crate) fn blend<S: Sample>(
     let full_frame_region = Region::with_size(header.width, header.height);
     let output_image_region = output_frame_region.translate(header.x0, header.y0);
 
-    let mut used_refs = [false; 4];
-    for blending_info in std::iter::once(&header.blending_info).chain(&header.ec_blending_info) {
-        let ref_idx = blending_info.source as usize;
-        used_refs[ref_idx] = true;
-    }
-
-    let mut ref_list = Vec::new();
-    for ref_idx in 0..4 {
-        if !used_refs[ref_idx] {
-            continue;
-        }
-        let ref_grid = &reference_grids[ref_idx];
-        if let Some(grid) = ref_grid {
-            ref_list.push(grid);
-        }
-    }
-    ref_list.sort_by_key(|grid| grid.frame.idx);
-
-    for grid in ref_list {
-        Arc::clone(&grid.image)
-            .run_with_image()?
-            .blend(Some(output_image_region), pool)?;
-    }
 
     let color_channels = new_grid.color_channels();
     let mut output_grid = ImageWithRegion::new(color_channels, tracker);
@@ -231,9 +207,6 @@ pub(crate) fn blend<S: Sample>(
 
         let (ref_idx, alpha_idx) = source_and_alpha_from_blending_info(blending_info, has_extra);
         let ref_grid = &reference_grids[ref_idx];
-        let mut can_overwrite = idx < color_channels
-            && (header.is_last
-                || (header.can_reference() && ref_idx == header.save_as_reference as usize));
 
         let original_frame_region = new_grid.regions_and_shifts()[idx]
             .0
@@ -247,12 +220,7 @@ pub(crate) fn blend<S: Sample>(
         let target_subgrid;
         let mut clone_empty = false;
         if let Some(grid) = ref_grid {
-            if grid.frame.header().is_keyframe() {
-                can_overwrite = false;
-            }
-
-            let base_grid_render = Arc::clone(&grid.image).run_with_image()?;
-            let base_grid = base_grid_render.blend(Some(output_image_region), pool)?;
+            let base_grid = &grid.image;
             assert_eq!(base_grid.color_channels(), color_channels);
 
             if base_grid.regions_and_shifts()[idx].0.is_empty() {
@@ -269,16 +237,7 @@ pub(crate) fn blend<S: Sample>(
                 let base_frame_region =
                     output_image_region.translate(-base_frame_header.x0, -base_frame_header.y0);
 
-                target_grid = if can_overwrite {
-                    if let Some(mut image) = base_grid_render.try_take_blended() {
-                        let buffer = &mut image.buffer_mut()[idx];
-                        std::mem::replace(buffer, ImageBuffer::F32(AlignedGrid::empty()))
-                    } else {
-                        base_grid.buffer()[idx].try_clone()?
-                    }
-                } else {
-                    base_grid.buffer()[idx].try_clone()?
-                };
+                target_grid = base_grid.buffer()[idx].try_clone()?;
                 target_region = base_grid.regions_and_shifts()[idx].0.translate(
                     base_frame_header.x0 - header.x0,
                     base_frame_header.y0 - header.y0,
@@ -402,14 +361,6 @@ pub(crate) fn blend<S: Sample>(
         output_grid.append_channel(target_grid, target_region);
     }
 
-    if header.can_reference() {
-        let ref_idx = header.save_as_reference as usize;
-        if let Some(grid) = &reference_grids[ref_idx]
-            && !grid.frame.header().is_keyframe()
-        {
-            grid.image.reset();
-        }
-    }
 
     output_grid.set_blend_done(true);
     Ok(output_grid)

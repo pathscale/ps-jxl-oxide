@@ -10,6 +10,9 @@ pub enum Error {
     IccProfileEmbedded,
     InvalidEnumColorspace,
     CmsNotAvailable,
+    TaskCancelled,
+    NotReady,
+    InvalidChannelLayout,
     CmsFailure(Box<dyn std::error::Error + Send + Sync + 'static>),
 }
 
@@ -39,6 +42,9 @@ impl std::fmt::Display for Error {
             IccProfileEmbedded => write!(f, "embedded ICC profile is signalled, use it instead"),
             InvalidEnumColorspace => write!(f, "unknown colorspace without embedded ICC profile"),
             CmsNotAvailable => write!(f, "color management system is not available"),
+            TaskCancelled => write!(f, "color conversion task cancelled"),
+            NotReady => write!(f, "color conversion suspended; use the async API"),
+            InvalidChannelLayout => write!(f, "color channel lengths differ"),
             CmsFailure(err) => write!(f, "color management system error: {err}"),
         }
     }
@@ -67,3 +73,4 @@ impl Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+

@@ -1,6 +1,6 @@
 [package]
 name = "jxl-threadpool"
-description = "Internal crate of jxl-oxide to abstract over thread pool implementation"
+description = "Owned task executor seam for jxl-oxide"
 authors = ["Wonwoo Choi <chwo9843@gmail.com>"]
 repository = "https://github.com/tirr-c/jxl-oxide.git"
 readme = "README.md"
@@ -10,6 +10,11 @@ license = "MIT OR Apache-2.0"
 version = "1.0.0"
 edition = "2024"
 
+[dependencies]
+nagoya = { version = "0.1.13", default-features = false, optional = true }
+
 [features]
-default = []
+default = ["std"]
+std = ["nagoya?/std"]
+nagoya = ["dep:nagoya"]
 

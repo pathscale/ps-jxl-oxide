@@ -49,4 +49,5 @@ path = "../jxl-threadpool"
 
 [features]
 default = []
+nagoya = ["jxl-threadpool/nagoya"]
 

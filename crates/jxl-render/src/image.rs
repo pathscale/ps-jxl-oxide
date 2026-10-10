@@ -1,4 +1,3 @@
-use std::sync::Arc;
 
 use jxl_frame::{FrameHeader, data::GlobalModular};
 use jxl_grid::{AlignedGrid, AllocTracker, MutableSubgrid};
@@ -7,7 +6,7 @@ use jxl_modular::{ChannelShift, Sample};
 use jxl_threadpool::JxlThreadPool;
 use jxl_vardct::LfChannelDequantization;
 
-use crate::{FrameRender, FrameRenderHandle, IndexedFrame, Region, Result, util};
+use crate::{IndexedFrame, Region, Result, util};
 
 #[derive(Debug)]
 pub enum ImageBuffer {
@@ -706,89 +705,15 @@ impl ImageWithRegion {
     }
 }
 
-pub struct RenderedImage<S: Sample> {
-    image: Arc<FrameRenderHandle<S>>,
-}
-
-impl<S: Sample> RenderedImage<S> {
-    pub(crate) fn new(image: Arc<FrameRenderHandle<S>>) -> Self {
-        Self { image }
-    }
-}
-
-impl<S: Sample> RenderedImage<S> {
-    pub(crate) fn blend(
-        &self,
-        oriented_image_region: Option<Region>,
-        pool: &JxlThreadPool,
-    ) -> Result<Arc<ImageWithRegion>> {
-        let image_header = self.image.frame.image_header();
-        let image_region = self.image.image_region;
-        let oriented_image_region = oriented_image_region
-            .unwrap_or_else(|| util::apply_orientation_to_image_region(image_header, image_region));
-
-        let mut grid_lock = self.image.wait_until_render()?;
-        if let FrameRender::Blended(image) = &*grid_lock {
-            return Ok(Arc::clone(image));
-        }
-
-        let render = std::mem::replace(&mut *grid_lock, FrameRender::ErrTaken);
-        let FrameRender::Done(mut grid) = render else {
-            panic!();
-        };
-
-        let skip_composition = composite_preprocess(&self.image.frame, &mut grid, pool)?;
-        if skip_composition {
-            let image = Arc::new(grid);
-            *grid_lock = FrameRender::Blended(Arc::clone(&image));
-            return Ok(image);
-        }
-
-        *grid_lock = FrameRender::Rendering;
-        drop(grid_lock);
-
-        composite(
-            &self.image.frame,
-            &mut grid,
-            self.image.refs.clone(),
-            oriented_image_region,
-            pool,
-        )?;
-
-        let image = Arc::new(grid);
-        drop(
-            self.image
-                .done_render(FrameRender::Blended(Arc::clone(&image))),
-        );
-        Ok(image)
-    }
-
-    pub(crate) fn try_take_blended(&self) -> Option<ImageWithRegion> {
-        let mut grid_lock = self.image.render.lock().unwrap();
-        match std::mem::take(&mut *grid_lock) {
-            FrameRender::Blended(image) => {
-                let cloned_image = Arc::clone(&image);
-                let image_inner = Arc::into_inner(cloned_image);
-                if image_inner.is_none() {
-                    *grid_lock = FrameRender::Blended(image);
-                }
-                image_inner
-            }
-            render => {
-                *grid_lock = render;
-                None
-            }
-        }
-    }
-}
 
 /// Prerocess image before composition.
 ///
 /// Returns `Ok(true)` if no actual composition is needed.
-pub(crate) fn composite_preprocess(
+pub(crate) async fn composite_preprocess(
     frame: &IndexedFrame,
     grid: &mut ImageWithRegion,
-    pool: &JxlThreadPool,
+    _pool: &JxlThreadPool,
+    tasks: &jxl_threadpool::Tasks,
 ) -> Result<bool> {
     let image_header = frame.image_header();
     let frame_header = frame.header();
@@ -805,7 +730,7 @@ pub(crate) fn composite_preprocess(
     let skip_blending = !frame_header.frame_type.is_normal_frame() || frame_header.resets_canvas;
 
     if !(grid.ct_done() || frame_header.save_before_ct || skip_blending && frame_header.is_last) {
-        util::convert_color_for_record(image_header, frame_header.do_ycbcr, grid, pool)?;
+        util::convert_color_for_record(image_header, frame_header.do_ycbcr, grid, tasks).await?;
     }
 
     if skip_blending {
@@ -815,10 +740,10 @@ pub(crate) fn composite_preprocess(
     Ok(skip_blending)
 }
 
-pub(crate) fn composite<S: Sample>(
+pub(crate) fn composite(
     frame: &IndexedFrame,
     grid: &mut ImageWithRegion,
-    refs: [Option<crate::Reference<S>>; 4],
+    refs: [Option<crate::Reference>; 4],
     oriented_image_region: Region,
     pool: &JxlThreadPool,
 ) -> Result<()> {

@@ -308,11 +308,11 @@ pub(crate) fn load_lf_groups<S: Sample>(
     Ok(lf_xyb)
 }
 
-pub(crate) fn convert_color_for_record(
+pub(crate) async fn convert_color_for_record(
     image_header: &ImageHeader,
     do_ycbcr: bool,
     fb: &mut ImageWithRegion,
-    pool: &JxlThreadPool,
+    tasks: &jxl_threadpool::Tasks,
 ) -> Result<()> {
     // save_before_ct = false
 
@@ -346,26 +346,21 @@ pub(crate) fn convert_color_for_record(
             _ => {}
         }
 
-        tracing::trace_span!("XYB to target colorspace").in_scope(|| -> Result<_> {
-            fb.convert_modular_color(metadata.bit_depth)?;
-            let [x, y, b] = fb.as_color_floats_mut();
-            tracing::trace!(colour_encoding = ?encoding);
-            let transform = ColorTransform::new(
-                &ColorEncodingWithProfile::new(EnumColourEncoding::xyb(
-                    jxl_color::RenderingIntent::Perceptual,
-                )),
-                &ColorEncodingWithProfile::new(encoding.clone()),
-                &metadata.opsin_inverse_matrix,
-                &metadata.tone_mapping,
-                &jxl_color::NullCms,
-            )
-            .unwrap();
-            let output_channels = transform
-                .run_with_threads(&mut [x.buf_mut(), y.buf_mut(), b.buf_mut()], pool)
-                .unwrap();
-            fb.remove_color_channels(output_channels);
-            Ok(())
-        })?;
+        fb.convert_modular_color(metadata.bit_depth)?;
+        let [x, y, b] = fb.as_color_floats_mut();
+        let transform = ColorTransform::new(
+            &ColorEncodingWithProfile::new(EnumColourEncoding::xyb(
+                jxl_color::RenderingIntent::Perceptual,
+            )),
+            &ColorEncodingWithProfile::new(encoding.clone()),
+            &metadata.opsin_inverse_matrix,
+            &metadata.tone_mapping,
+            &jxl_color::NullCms,
+        )?;
+        let output_channels = transform
+            .run_with_tasks(&mut [x.buf_mut(), y.buf_mut(), b.buf_mut()], tasks)
+            .await?;
+        fb.remove_color_channels(output_channels);
 
         fb.set_ct_done(true);
     }
@@ -453,3 +448,4 @@ impl<S: Clone> PaddedGrid<S> {
         }
     }
 }
+

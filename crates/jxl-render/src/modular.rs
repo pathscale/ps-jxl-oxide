@@ -3,7 +3,17 @@ use jxl_modular::{Sample, image::TransformedModularSubimage};
 
 use crate::{Error, ImageWithRegion, IndexedFrame, Region, RenderCache, Result, util};
 
-pub(crate) fn render_modular<S: Sample>(
+pub(crate) async fn render_modular<S: Sample>(
+    frame: &IndexedFrame,
+    cache: &mut RenderCache<S>,
+    region: Region,
+    pool: &jxl_threadpool::JxlThreadPool,
+    _tasks: &jxl_threadpool::Tasks,
+) -> Result<ImageWithRegion> {
+    render_modular_inline(frame, cache, region, pool)
+}
+
+fn render_modular_inline<S: Sample>(
     frame: &IndexedFrame,
     cache: &mut RenderCache<S>,
     region: Region,
@@ -167,3 +177,4 @@ pub fn compute_modular_region<S: Sample>(
         region
     }
 }
+

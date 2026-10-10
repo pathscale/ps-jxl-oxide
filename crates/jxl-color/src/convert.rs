@@ -607,49 +607,69 @@ impl ColorTransform {
         Ok(num_channels)
     }
 
-    /// Performs the prepared color transformation on the samples with the thread pool.
-    ///
-    /// Returns the number of final channels after transformation.
-    ///
-    /// `channels` are planar sample data, all having the same length.
-    ///
-    /// # Errors
-    /// This function will return an error if it encountered ICC to ICC operation and the provided
-    /// CMS cannot handle it.
+    /// Runs the chunked transform inline for legacy synchronous callers.
     pub fn run_with_threads(
         &self,
         channels: &mut [&mut [f32]],
-        pool: &jxl_threadpool::JxlThreadPool,
+        _pool: &jxl_threadpool::JxlThreadPool,
     ) -> Result<usize> {
-        let _gurad = tracing::trace_span!("Run color transform ops").entered();
+        jxl_threadpool::poll_once(self.run_with_tasks(channels, &jxl_threadpool::Tasks::inline()))
+            .map_err(|_| Error::NotReady)?
+    }
 
-        let mut chunks = Vec::new();
-        let mut it = channels
-            .iter_mut()
-            .map(|ch| ch.chunks_mut(65536))
-            .collect::<Vec<_>>();
-        // Transpose chunked channel buffers.
-        while let Some::<Vec<_>>(chunk) = it.iter_mut().map(|it| it.next()).collect() {
+    /// Transforms owned planar chunks using the caller's executor.
+    ///
+    /// Each job retains an immutable prepared transform and returns its channels.
+    /// Results and errors are reduced in chunk order before any samples are merged.
+    pub async fn run_with_tasks(
+        &self,
+        channels: &mut [&mut [f32]],
+        tasks: &jxl_threadpool::Tasks,
+    ) -> Result<usize> {
+        let len = channels.first().map_or(0, |channel| channel.len());
+        if channels.iter().any(|channel| channel.len() != len) {
+            return Err(Error::InvalidChannelLayout);
+        }
+        if len == 0 {
+            return Ok(self.begin_channels);
+        }
+
+        let transform = Arc::new(self.clone());
+        let mut jobs: Vec<Box<dyn FnOnce() -> Result<(Vec<Vec<f32>>, usize)> + Send + 'static>> =
+            Vec::with_capacity(len.div_ceil(65536));
+        for start in (0..len).step_by(65536) {
+            let end = start.saturating_add(65536).min(len);
+            let mut chunk: Vec<Vec<f32>> =
+                channels.iter().map(|channel| channel[start..end].to_vec()).collect();
+            let transform = Arc::clone(&transform);
+            jobs.push(Box::new(move || {
+                let mut views: Vec<&mut [f32]> =
+                    chunk.iter_mut().map(Vec::as_mut_slice).collect();
+                let output_channels = transform.run(&mut views)?;
+                drop(views);
+                Ok((chunk, output_channels))
+            }));
+        }
+
+        let results = tasks.run_all(jobs).await.map_err(|_| Error::TaskCancelled)?;
+        let mut chunks = Vec::with_capacity(results.len());
+        let mut output_channels = self.begin_channels;
+        for result in results {
+            let (chunk, count) = result?;
+            output_channels = count;
             chunks.push(chunk);
         }
 
-        let ret = std::sync::Mutex::new(Ok(self.begin_channels));
-        pool.for_each_vec(chunks, |mut channels| {
-            let mut num_channels = self.begin_channels;
-            for op in &self.ops {
-                match op.run(&mut channels, num_channels) {
-                    Ok(x) => {
-                        num_channels = x;
-                    }
-                    err => {
-                        *ret.lock().unwrap() = err;
-                        return;
-                    }
-                }
+        let mut start = 0;
+        for chunk in chunks {
+            let chunk_len = chunk[0].len();
+            let end = start + chunk_len;
+            for (channel, output) in channels.iter_mut().zip(chunk) {
+                channel[start..end].copy_from_slice(&output);
             }
-            *ret.lock().unwrap() = Ok(num_channels);
-        });
-        ret.into_inner().unwrap()
+            start = end;
+        }
+        Ok(output_channels)
     }
 
     fn optimize(&mut self) {

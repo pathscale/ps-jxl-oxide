@@ -4,20 +4,21 @@ use jxl_frame::{
 };
 use jxl_grid::AlignedGrid;
 use jxl_modular::Sample;
-use jxl_threadpool::JxlThreadPool;
+use jxl_threadpool::{JxlThreadPool, Tasks};
 
 use crate::{
     Error, ImageWithRegion, IndexedFrame, Reference, ReferenceFrames, Region, Result, blend,
     features, filter, modular, state::RenderCache, util, vardct,
 };
 
-pub(crate) fn render_frame<S: Sample>(
+pub(crate) async fn render_frame<S: Sample>(
     frame: &IndexedFrame,
-    reference_frames: ReferenceFrames<S>,
+    reference_frames: ReferenceFrames,
     cache: &mut RenderCache<S>,
     image_region: Region,
     pool: JxlThreadPool,
     frame_visibility: (usize, usize),
+    tasks: &Tasks,
 ) -> Result<ImageWithRegion> {
     let frame_region = util::image_region_to_frame(frame, image_region, false);
     tracing::debug!(
@@ -44,7 +45,7 @@ pub(crate) fn render_frame<S: Sample>(
         .intersection(full_frame_region);
 
     let mut fb = match frame_header.encoding {
-        Encoding::Modular => modular::render_modular(frame, cache, color_padded_region, &pool)?,
+        Encoding::Modular => modular::render_modular(frame, cache, color_padded_region, &pool, tasks).await?,
         Encoding::VarDct => {
             let result = vardct::render_vardct(
                 frame,
@@ -52,12 +53,12 @@ pub(crate) fn render_frame<S: Sample>(
                 cache,
                 color_padded_region,
                 &pool,
-            );
+                tasks,
+            ).await;
             match (result, reference_frames.lf) {
                 (Ok(grid), _) => grid,
                 (Err(e), Some(lf)) if matches!(e, Error::IncompleteFrame) || e.unexpected_eof() => {
-                    let render = lf.image.run_with_image()?;
-                    let render = render.blend(None, &pool)?;
+                    let render = lf.image;
                     let mut render = render.upsample_lf(1)?;
                     render.fill_opaque_alpha(&image_header.metadata.ec_info);
                     render
@@ -149,7 +150,7 @@ pub(crate) fn render_frame<S: Sample>(
     fb.upsample_nonseparable(image_header, frame_header, upsampling_valid_region, false)?;
 
     if !frame_header.save_before_ct && !frame_header.is_last {
-        util::convert_color_for_record(image_header, frame_header.do_ycbcr, &mut fb, &pool)?;
+        util::convert_color_for_record(image_header, frame_header.do_ycbcr, &mut fb, tasks).await?;
     }
 
     Ok(fb)
@@ -160,7 +161,7 @@ fn render_features<S: Sample>(
     frame: &IndexedFrame,
     grid: &mut ImageWithRegion,
     upsampling_valid_region: Region,
-    reference_grids: [Option<Reference<S>>; 4],
+    reference_grids: [Option<Reference>; 4],
     cache: &mut RenderCache<S>,
     visible_frames_num: usize,
     invisible_frames_num: usize,
@@ -186,12 +187,7 @@ fn render_features<S: Sample>(
             let Some(ref_grid) = &reference_grids[patch.ref_idx as usize] else {
                 return Err(Error::InvalidReference(patch.ref_idx));
             };
-            let ref_header = ref_grid.frame.f.header();
-            let oriented_image_region = Region::with_size(ref_header.width, ref_header.height)
-                .translate(ref_header.x0, ref_header.y0);
-            let ref_grid_image = std::sync::Arc::clone(&ref_grid.image).run_with_image()?;
-            let ref_grid_image = ref_grid_image.blend(Some(oriented_image_region), pool)?;
-            blend::patch(image_header, grid, &ref_grid_image, patch)?;
+            blend::patch(image_header, grid, &ref_grid.image, patch)?;
         }
     }
 
@@ -223,3 +219,4 @@ fn render_features<S: Sample>(
 
     Ok(())
 }
+

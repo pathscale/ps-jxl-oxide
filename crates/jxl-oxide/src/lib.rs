@@ -41,6 +41,13 @@
 //!
 //! For complete input use [`JxlImageBuilder::read_bytes`] with an `Arc<[u8]>`.
 //!
+//! Rendering exclusively borrows the image while its coordinator updates frame state.
+//! The builder defaults to [`Tasks::inline`]; synchronous render methods poll the async
+//! path once and return an error if it suspends. Set [`JxlImageBuilder::tasks`] to use
+//! a caller-owned executor and await [`JxlImage::render_frame_async`] (or its cropped
+//! and loading variants). The decoder never creates workers. With the `nagoya`
+//! feature, [`NagoyaExecutor`] adapts an existing host executor.
+//!
 //! `JxlImage` parses the image header and embedded ICC profile (if there's any). Use
 //! [`JxlImage::render_frame`] to render the image.
 //!
@@ -50,7 +57,7 @@
 //!
 //! # fn present_image(_: Render) {}
 //! # fn main() -> jxl_oxide::Result<()> {
-//! # let image = JxlImage::builder().read(std::io::empty()).unwrap();
+//! # let mut image = JxlImage::builder().read(std::io::empty()).unwrap();
 //! for keyframe_idx in 0..image.num_loaded_keyframes() {
 //!     let render = image.render_frame(keyframe_idx)?;
 //!     present_image(render);
@@ -101,7 +108,7 @@
 //!
 //! # fn present_image_with_cms(_: Render, _: &[u8]) {}
 //! # fn main() -> jxl_oxide::Result<()> {
-//! # let image = JxlImage::builder().read(std::io::empty()).unwrap();
+//! # let mut image = JxlImage::builder().read(std::io::empty()).unwrap();
 //! let icc_profile = image.rendered_icc();
 //! for keyframe_idx in 0..image.num_loaded_keyframes() {
 //!     let render = image.render_frame(keyframe_idx)?;
@@ -131,7 +138,9 @@ pub use jxl_frame::{Frame, FrameHeader};
 pub use jxl_grid::{AlignedGrid, AllocTracker};
 pub use jxl_image::color::{self, EnumColourEncoding, RenderingIntent};
 pub use jxl_image::{self as image, ExtraChannelType, ImageHeader};
-pub use jxl_threadpool::JxlThreadPool;
+pub use jxl_threadpool::{Cancelled, Job, JobFuture, JxlThreadPool, TaskExecutor, Tasks};
+#[cfg(feature = "nagoya")]
+pub use jxl_threadpool::NagoyaExecutor;
 
 mod aux_box;
 mod fb;
@@ -140,23 +149,26 @@ pub use fb::{FrameBuffer, FrameBufferSample, ImageStream};
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
 
-fn default_pool() -> JxlThreadPool {
-    JxlThreadPool::none()
-}
 
 /// JPEG XL image decoder builder.
 #[derive(Debug, Default)]
 pub struct JxlImageBuilder {
-    pool: Option<JxlThreadPool>,
+    tasks: Option<Tasks>,
     tracker: Option<AllocTracker>,
     force_wide_buffers: bool,
 }
 
 impl JxlImageBuilder {
-    /// Sets a custom thread pool.
-    pub fn pool(mut self, pool: JxlThreadPool) -> Self {
-        self.pool = Some(pool);
+    /// Sets the caller-owned executor used by async rendering.
+    pub fn tasks(mut self, tasks: Tasks) -> Self {
+        self.tasks = Some(tasks);
         self
+    }
+
+    /// Selects inline tasks through the legacy dispatch API.
+    #[deprecated(note = "use tasks(Tasks::inline())")]
+    pub fn pool(self, _pool: JxlThreadPool) -> Self {
+        self.tasks(Tasks::inline())
     }
 
     /// Sets an allocation tracker.
@@ -174,7 +186,8 @@ impl JxlImageBuilder {
     /// Consumes the builder, and creates an empty, uninitialized JPEG XL image decoder.
     pub fn build_uninit(self) -> UninitializedJxlImage {
         UninitializedJxlImage {
-            pool: self.pool.unwrap_or_else(default_pool),
+            pool: JxlThreadPool::none(),
+            tasks: self.tasks.unwrap_or_else(Tasks::inline),
             tracker: self.tracker,
             reader: ContainerParser::new(),
             buffer: Spans::new(),
@@ -237,6 +250,7 @@ impl JxlImageBuilder {
 /// ```
 pub struct UninitializedJxlImage {
     pool: JxlThreadPool,
+    tasks: Tasks,
     tracker: Option<AllocTracker>,
     reader: ContainerParser,
     buffer: Spans,
@@ -387,6 +401,7 @@ impl UninitializedJxlImage {
 
         let mut image = JxlImage {
             pool: self.pool.clone(),
+            tasks: self.tasks.clone(),
             reader: self.reader,
             image_header,
             header_data,
@@ -418,6 +433,7 @@ pub enum InitializeResult {
 #[derive(Debug)]
 pub struct JxlImage {
     pool: JxlThreadPool,
+    tasks: Tasks,
     reader: ContainerParser,
     image_header: Arc<ImageHeader>,
     header_data: Section,
@@ -637,7 +653,13 @@ impl JxlImage {
         self.inner.frame_offsets.get(frame_index).copied()
     }
 
-    /// Returns the thread pool used by the renderer.
+    /// Returns the caller-owned task executor.
+    #[inline]
+    pub fn tasks(&self) -> &Tasks {
+        &self.tasks
+    }
+
+    /// Returns the legacy inline dispatch wrapper.
     #[inline]
     pub fn pool(&self) -> &JxlThreadPool {
         &self.pool
@@ -678,13 +700,23 @@ impl JxlImage {
 /// # Rendering to image buffers
 impl JxlImage {
     /// Renders the given keyframe.
-    pub fn render_frame(&self, keyframe_index: usize) -> Result<Render> {
-        self.render_frame_cropped(keyframe_index)
+    pub fn render_frame(&mut self, keyframe_index: usize) -> Result<Render> {
+        jxl_threadpool::poll_once(self.render_frame_async(keyframe_index))?
+    }
+
+    /// Renders the given keyframe with the caller's executor.
+    pub async fn render_frame_async(&mut self, keyframe_index: usize) -> Result<Render> {
+        self.render_frame_cropped_async(keyframe_index).await
     }
 
     /// Renders the given keyframe with optional cropping region.
-    pub fn render_frame_cropped(&self, keyframe_index: usize) -> Result<Render> {
-        let image = self.ctx.render_keyframe(keyframe_index)?;
+    pub fn render_frame_cropped(&mut self, keyframe_index: usize) -> Result<Render> {
+        jxl_threadpool::poll_once(self.render_frame_cropped_async(keyframe_index))?
+    }
+
+    /// Renders the given keyframe in the current cropping region with the caller's executor.
+    pub async fn render_frame_cropped_async(&mut self, keyframe_index: usize) -> Result<Render> {
+        let image = self.ctx.render_keyframe(keyframe_index, self.tasks.clone()).await?;
 
         let image_region = self
             .ctx
@@ -712,12 +744,22 @@ impl JxlImage {
 
     /// Renders the currently loading keyframe.
     pub fn render_loading_frame(&mut self) -> Result<Render> {
-        self.render_loading_frame_cropped()
+        jxl_threadpool::poll_once(self.render_loading_frame_async())?
+    }
+
+    /// Renders the currently loading keyframe with the caller's executor.
+    pub async fn render_loading_frame_async(&mut self) -> Result<Render> {
+        self.render_loading_frame_cropped_async().await
     }
 
     /// Renders the currently loading keyframe with optional cropping region.
     pub fn render_loading_frame_cropped(&mut self) -> Result<Render> {
-        let (frame, image) = self.ctx.render_loading_keyframe()?;
+        jxl_threadpool::poll_once(self.render_loading_frame_cropped_async())?
+    }
+
+    /// Renders the loading keyframe in the current cropping region with the caller's executor.
+    pub async fn render_loading_frame_cropped_async(&mut self) -> Result<Render> {
+        let (frame, image) = self.ctx.render_loading_keyframe(self.tasks.clone()).await?;
         let frame_header = frame.header();
         let name = frame_header.name.clone();
         let duration = frame_header.duration;
