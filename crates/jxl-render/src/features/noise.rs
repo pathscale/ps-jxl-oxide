@@ -1,26 +1,25 @@
-use std::num::Wrapping;
+use std::{num::Wrapping, sync::Arc};
 
 use jxl_frame::{FrameHeader, data::NoiseParameters};
 use jxl_grid::{AlignedGrid, AllocTracker, SharedSubgrid};
-use jxl_threadpool::JxlThreadPool;
+use jxl_threadpool::Tasks;
 
-use crate::{ImageWithRegion, Region, Result};
+use crate::{Error, ImageWithRegion, Region, Result};
 
 // Padding for 5x5 kernel convolution step
 const PADDING: usize = 2;
 
-pub fn render_noise(
+pub async fn render_noise(
     header: &FrameHeader,
     visible_frames_num: usize,
     invisible_frames_num: usize,
     base_correlations_xb: Option<(f32, f32)>,
     grid: &mut ImageWithRegion,
     params: &NoiseParameters,
-    pool: &JxlThreadPool,
+    tasks: &Tasks,
 ) -> Result<()> {
     let (region, shift) = grid.regions_and_shifts()[0];
     let tracker = grid.alloc_tracker().cloned();
-    let [grid_x, grid_y, grid_b] = grid.as_color_floats_mut();
 
     let full_frame_region = Region::with_size(header.width, header.height);
     let actual_region = region
@@ -38,8 +37,10 @@ pub fn render_noise(
         invisible_frames_num,
         header,
         tracker.as_ref(),
-        pool,
-    )?;
+        tasks,
+    )
+    .await?;
+    let [grid_x, grid_y, grid_b] = grid.as_color_floats_mut();
 
     let mut lut = [0f32; 9];
     lut[..8].copy_from_slice(&params.lut);
@@ -49,18 +50,19 @@ pub fn render_noise(
         let row_x = grid_x.get_row_mut(fy);
         let row_y = grid_y.get_row_mut(fy);
         let row_b = grid_b.get_row_mut(fy);
-        let row_noise_x = noise_buffer[0].get_row(y);
-        let row_noise_y = noise_buffer[1].get_row(y);
-        let row_noise_b = noise_buffer[2].get_row(y);
+        let group_row = (y / noise_buffer.group_dim) * noise_buffer.groups_per_row;
+        let noise_y_in_group = y % noise_buffer.group_dim;
 
         for fx in 0..width {
             let x = fx + left;
+            let group = &noise_buffer.groups[group_row + x / noise_buffer.group_dim];
+            let noise_x_in_group = x % noise_buffer.group_dim;
 
             let grid_x = row_x[fx];
             let grid_y = row_y[fx];
-            let noise_x = row_noise_x[x];
-            let noise_y = row_noise_y[x];
-            let noise_b = row_noise_b[x];
+            let noise_x = group[0].get_row(noise_y_in_group)[noise_x_in_group];
+            let noise_y = group[1].get_row(noise_y_in_group)[noise_x_in_group];
+            let noise_b = group[2].get_row(noise_y_in_group)[noise_x_in_group];
 
             let in_x = grid_x + grid_y;
             let in_y = grid_y - grid_x;
@@ -85,13 +87,19 @@ pub fn render_noise(
     Ok(())
 }
 
-fn init_noise(
+struct NoiseImage {
+    groups: Vec<[AlignedGrid<f32>; 3]>,
+    group_dim: usize,
+    groups_per_row: usize,
+}
+
+async fn init_noise(
     visible_frames: usize,
     invisible_frames: usize,
     header: &FrameHeader,
     tracker: Option<&AllocTracker>,
-    pool: &JxlThreadPool,
-) -> Result<[AlignedGrid<f32>; 3]> {
+    tasks: &Tasks,
+) -> Result<NoiseImage> {
     let seed0 = rng_seed0(visible_frames, invisible_frames);
 
     // We use header.width and header.height because
@@ -104,7 +112,8 @@ fn init_noise(
     let groups_per_row = width.div_ceil(group_dim);
     let num_groups = groups_per_row * height.div_ceil(group_dim);
 
-    let mut noise_groups = Vec::with_capacity(num_groups);
+    let mut jobs: Vec<Box<dyn FnOnce() -> NoiseGroup + Send + 'static>> =
+        Vec::with_capacity(num_groups);
     for group_idx in 0..num_groups {
         let group_x = group_idx % groups_per_row;
         let group_y = group_idx / groups_per_row;
@@ -114,64 +123,76 @@ fn init_noise(
 
         let group_width = group_dim.min(width - x0);
         let group_height = group_dim.min(height - y0);
-        let noise_group = NoiseGroup::new(group_width, group_height, seed0, seed1, tracker)?;
-        noise_groups.push(noise_group);
+        let group = NoiseGroup::allocate(group_width, group_height, tracker)?;
+        jobs.push(Box::new(move || group.fill(seed0, seed1)));
     }
 
-    let mut convolved: [AlignedGrid<f32>; 3] = [
-        AlignedGrid::with_alloc_tracker(width, height, tracker)?,
-        AlignedGrid::with_alloc_tracker(width, height, tracker)?,
-        AlignedGrid::with_alloc_tracker(width, height, tracker)?,
-    ];
+    let noise_groups = Arc::new(
+        tasks
+            .run_all(jobs)
+            .await
+            .map_err(|_| Error::NotSupported("noise task cancelled or returned an invalid output"))?,
+    );
 
-    // Each channel is convolved by the 5×5 kernel
-    let mut jobs = Vec::with_capacity(num_groups * 3);
-    for (channel_idx, out) in convolved.iter_mut().enumerate() {
-        for (group_idx, out_subgrid) in out
-            .as_subgrid_mut()
-            .into_groups(group_dim, group_dim)
-            .into_iter()
-            .enumerate()
-        {
-            let group_x = group_idx % groups_per_row;
-            let group_y = group_idx / groups_per_row;
+    // Each job owns all three convolved channels and private 5×5 row scratch.
+    let mut jobs: Vec<Box<dyn FnOnce() -> [AlignedGrid<f32>; 3] + Send + 'static>> =
+        Vec::with_capacity(num_groups);
+    for group_idx in 0..num_groups {
+        let group_x = group_idx % groups_per_row;
+        let group_y = group_idx / groups_per_row;
+        let group_width = noise_groups[group_idx].width;
+        let group_height = noise_groups[group_idx].height;
+        let mut output = [
+            AlignedGrid::with_alloc_tracker(group_width, group_height, tracker)?,
+            AlignedGrid::with_alloc_tracker(group_width, group_height, tracker)?,
+            AlignedGrid::with_alloc_tracker(group_width, group_height, tracker)?,
+        ];
+        let mut rows = AlignedGrid::with_alloc_tracker(
+            group_width + PADDING * 2,
+            1 + PADDING * 2,
+            tracker,
+        )?;
+        let noise_groups = Arc::clone(&noise_groups);
 
-            // `adjacent_groups[4] == this`
-            let adjacent_groups: [_; 9] = std::array::from_fn(|idx| {
-                let offset_x = (idx % 3) as isize - 1;
-                let offset_y = (idx / 3) as isize - 1;
-                if let (Some(x), Some(y)) = (
-                    group_x.checked_add_signed(offset_x),
-                    group_y.checked_add_signed(offset_y),
-                ) {
-                    let group_idx = y * groups_per_row + x;
-                    if x < groups_per_row {
-                        noise_groups
-                            .get(group_idx)
-                            .map(|group| group.as_subgrid(channel_idx))
+        jobs.push(Box::new(move || {
+            for (channel_idx, output) in output.iter_mut().enumerate() {
+                // `adjacent_groups[4] == this`
+                let adjacent_groups: [_; 9] = std::array::from_fn(|idx| {
+                    let offset_x = (idx % 3) as isize - 1;
+                    let offset_y = (idx / 3) as isize - 1;
+                    if let (Some(x), Some(y)) = (
+                        group_x.checked_add_signed(offset_x),
+                        group_y.checked_add_signed(offset_y),
+                    ) {
+                        let group_idx = y * groups_per_row + x;
+                        if x < groups_per_row {
+                            noise_groups
+                                .get(group_idx)
+                                .map(|group| group.as_subgrid(channel_idx))
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     }
-                } else {
-                    None
-                }
-            });
-
-            jobs.push((out_subgrid, adjacent_groups));
-        }
+                });
+                convolve_fill(output.as_subgrid_mut(), adjacent_groups, &mut rows);
+            }
+            output
+        }));
     }
 
-    let result = std::sync::Mutex::new(Ok(()));
-    pool.for_each_vec(jobs, |job| {
-        let (out_subgrid, adjacent_groups) = job;
-        let r = convolve_fill(out_subgrid, adjacent_groups, tracker);
-        if r.is_err() {
-            *result.lock().unwrap() = r;
-        }
-    });
-    result.into_inner().unwrap()?;
+    let groups = tasks
+        .run_all(jobs)
+        .await
+        .map_err(|_| Error::NotSupported("noise task cancelled or returned an invalid output"))?;
+    drop(noise_groups);
 
-    Ok(convolved)
+    Ok(NoiseImage {
+        groups,
+        group_dim,
+        groups_per_row,
+    })
 }
 
 /// Seed for [`XorShift128Plus`] from the number of ‘visible’ frames decoded so far
@@ -197,11 +218,9 @@ struct NoiseGroup {
 }
 
 impl NoiseGroup {
-    fn new(
+    fn allocate(
         width: usize,
         height: usize,
-        seed0: u64,
-        seed1: u64,
         tracker: Option<&AllocTracker>,
     ) -> Result<Self> {
         let width_n2 = width.div_ceil(N * 2);
@@ -210,19 +229,7 @@ impl NoiseGroup {
         let alloc_handle = tracker
             .map(|tracker| tracker.alloc::<f32>(elems))
             .transpose()?;
-
-        let mut rng = XorShift128Plus::new(seed0, seed1);
-
-        let buf: [_; 3] = std::array::from_fn(|_| {
-            let num_iters = width_n2 * height;
-            let mut buf = Vec::with_capacity(num_iters * N * 2);
-            for _ in 0..num_iters {
-                let bits = rng.get_u32_bits();
-                let bits = bits.map(|x| f32::from_bits((x >> 9) | 0x3f800000));
-                buf.extend_from_slice(&bits);
-            }
-            buf
-        });
+        let buf = std::array::from_fn(|_| Vec::with_capacity(stride * height));
 
         Ok(Self {
             buf,
@@ -231,6 +238,20 @@ impl NoiseGroup {
             stride,
             _alloc_handle: alloc_handle,
         })
+    }
+
+    fn fill(mut self, seed0: u64, seed1: u64) -> Self {
+        let width_n2 = self.width.div_ceil(N * 2);
+        let mut rng = XorShift128Plus::new(seed0, seed1);
+        for buf in &mut self.buf {
+            let num_iters = width_n2 * self.height;
+            for _ in 0..num_iters {
+                let bits = rng.get_u32_bits();
+                let bits = bits.map(|x| f32::from_bits((x >> 9) | 0x3f800000));
+                buf.extend_from_slice(&bits);
+            }
+        }
+        self
     }
 
     #[inline]
@@ -242,15 +263,16 @@ impl NoiseGroup {
 fn convolve_fill(
     mut out: jxl_grid::MutableSubgrid<'_, f32>,
     adjacent_groups: [Option<SharedSubgrid<f32>>; 9],
-    tracker: Option<&AllocTracker>,
-) -> Result<()> {
+    rows: &mut AlignedGrid<f32>,
+) {
     let this = adjacent_groups[4].unwrap();
     let width = out.width();
     let height = out.height();
     assert_eq!(this.width(), width);
     assert_eq!(this.height(), height);
 
-    let mut rows = AlignedGrid::with_alloc_tracker(width + PADDING * 2, 1 + PADDING * 2, tracker)?;
+    assert_eq!(rows.width(), width + PADDING * 2);
+    assert_eq!(rows.height(), 1 + PADDING * 2);
     if let Some(c) = adjacent_groups[1] {
         let l = adjacent_groups[0];
         let r = adjacent_groups[2];
@@ -319,8 +341,6 @@ fn convolve_fill(
             fill_once(rows.get_row_mut(fill_y), next_y, adjacent_groups);
         }
     }
-
-    Ok(())
 }
 
 fn fill_once(out: &mut [f32], fill_y: usize, adjacent_groups: [Option<SharedSubgrid<f32>>; 9]) {
@@ -456,3 +476,4 @@ fn split_mix_64(z: Wrapping<u64>) -> Wrapping<u64> {
     let z = (z ^ (z >> 27)) * Wrapping(0x94D049BB133111EB);
     z ^ (z >> 31)
 }
+

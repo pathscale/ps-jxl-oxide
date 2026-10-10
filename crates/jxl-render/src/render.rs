@@ -2,7 +2,6 @@ use jxl_frame::{
     filter::{EdgePreservingFilter, Gabor},
     header::Encoding,
 };
-use jxl_grid::AlignedGrid;
 use jxl_modular::Sample;
 use jxl_threadpool::{JxlThreadPool, Tasks};
 
@@ -73,62 +72,39 @@ pub(crate) async fn render_frame<S: Sample>(
     }
 
     let color_channels = fb.color_channels();
-    let mut scratch_buffer = None;
-    if let Gabor::Enabled(weights) = frame_header.restoration_filter.gab {
+    let gabor_enabled = frame_header.restoration_filter.gab.enabled();
+    let epf_enabled = frame_header.restoration_filter.epf.enabled();
+    if (gabor_enabled || epf_enabled) && !color_padded_region.is_empty() {
         if fb.color_channels() < 3 {
             tracing::trace!("Cloning gray channel");
             fb.clone_gray()?;
         }
 
         fb.convert_modular_color(image_header.metadata.bit_depth)?;
-        let mut fb_scratch = {
-            let tracker = fb.alloc_tracker();
-            let width = color_padded_region.width as usize;
-            let height = color_padded_region.height as usize;
-            [
-                AlignedGrid::with_alloc_tracker(width, height, tracker)?,
-                AlignedGrid::with_alloc_tracker(width, height, tracker)?,
-                AlignedGrid::with_alloc_tracker(width, height, tracker)?,
-            ]
-        };
-        filter::apply_gabor_like(
-            &mut fb,
-            color_padded_region,
-            &mut fb_scratch,
-            weights,
-            &pool,
-        );
-        scratch_buffer = Some(fb_scratch);
-    }
+        let preserve_outside = !gabor_enabled
+            && matches!(
+                &frame_header.restoration_filter.epf,
+                EdgePreservingFilter::Enabled(params) if params.iters == 2
+            );
+        let mut filtered =
+            filter::FilterImage::take_from(&mut fb, color_padded_region, preserve_outside);
 
-    if let EdgePreservingFilter::Enabled(epf_params) = &frame_header.restoration_filter.epf {
-        if fb.color_channels() < 3 {
-            tracing::trace!("Cloning gray channel");
-            fb.clone_gray()?;
+        if let Gabor::Enabled(weights) = frame_header.restoration_filter.gab {
+            filtered = filter::apply_gabor_like(filtered, weights, tasks).await?;
         }
 
-        fb.convert_modular_color(image_header.metadata.bit_depth)?;
-        let fb_scratch = if let Some(buffer) = scratch_buffer {
-            buffer
-        } else {
-            let tracker = fb.alloc_tracker();
-            let width = color_padded_region.width as usize;
-            let height = color_padded_region.height as usize;
-            [
-                AlignedGrid::with_alloc_tracker(width, height, tracker)?,
-                AlignedGrid::with_alloc_tracker(width, height, tracker)?,
-                AlignedGrid::with_alloc_tracker(width, height, tracker)?,
-            ]
-        };
-        filter::apply_epf(
-            &mut fb,
-            fb_scratch,
-            color_padded_region,
-            &cache.lf_groups,
-            frame_header,
-            epf_params,
-            &pool,
-        );
+        if let EdgePreservingFilter::Enabled(epf_params) = &frame_header.restoration_filter.epf {
+            filtered = filter::apply_epf(
+                filtered,
+                &cache.lf_groups,
+                frame_header,
+                epf_params,
+                tasks,
+            )
+            .await?;
+        }
+
+        filtered.write_to(&mut fb)?;
     }
 
     // Truncate cloned gray channels.
@@ -144,8 +120,9 @@ pub(crate) async fn render_frame<S: Sample>(
         cache,
         frame_visibility.0,
         frame_visibility.1,
-        &pool,
-    )?;
+        tasks,
+    )
+    .await?;
 
     fb.upsample_nonseparable(image_header, frame_header, upsampling_valid_region, false)?;
 
@@ -157,7 +134,7 @@ pub(crate) async fn render_frame<S: Sample>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn render_features<S: Sample>(
+async fn render_features<S: Sample>(
     frame: &IndexedFrame,
     grid: &mut ImageWithRegion,
     upsampling_valid_region: Region,
@@ -165,7 +142,7 @@ fn render_features<S: Sample>(
     cache: &mut RenderCache<S>,
     visible_frames_num: usize,
     invisible_frames_num: usize,
-    pool: &JxlThreadPool,
+    tasks: &Tasks,
 ) -> Result<()> {
     let image_header = frame.image_header();
     let frame_header = frame.header();
@@ -210,8 +187,9 @@ fn render_features<S: Sample>(
                 base_correlations_xb,
                 grid,
                 noise,
-                pool,
-            )?;
+                tasks,
+            )
+            .await?;
         } else {
             tracing::warn!("Cannot render noise on grayscale buffer; skipping");
         }
