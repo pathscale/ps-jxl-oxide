@@ -6,11 +6,28 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
-use jxl_oxide::{FrameBuffer, JxlImage, Tasks, NullCms};
+use jxl_oxide::{FrameBuffer, JxlImage, NullCms, Render, Tasks};
 
 type CheckResult<T> = Result<T, String>;
+
+/// The runtime every decode runs on when --workers is given; inline otherwise.
+#[cfg(feature = "nagoya")]
+static RUNTIME: OnceLock<nagoya::runtime::Runtime> = OnceLock::new();
+static TASKS: OnceLock<Tasks> = OnceLock::new();
+
+fn tasks() -> Tasks {
+    TASKS.get().cloned().unwrap_or_else(Tasks::inline)
+}
+
+fn render(image: &mut JxlImage, index: usize) -> jxl_oxide::Result<Render> {
+    #[cfg(feature = "nagoya")]
+    if RUNTIME.get().is_some() {
+        return nagoya::block_on(image.render_frame_async(index));
+    }
+    image.render_frame(index)
+}
 
 struct Arguments {
     directory: PathBuf,
@@ -19,6 +36,8 @@ struct Arguments {
     chunk: Option<usize>,
     /// Print a hash of every rendered frame instead of comparing against references.
     hash: bool,
+    /// Decode on a nagoya runtime with this many workers.
+    workers: Option<usize>,
 }
 
 #[derive(Default)]
@@ -85,6 +104,7 @@ fn arguments() -> CheckResult<Option<Arguments>> {
     let mut only = None;
     let mut chunk = None;
     let mut hash = false;
+    let mut workers = None;
     let mut positional = false;
     while let Some(arg) = args.next() {
         if !positional {
@@ -121,6 +141,16 @@ fn arguments() -> CheckResult<Option<Arguments>> {
                     chunk = Some(size);
                     continue;
                 }
+                Some("--workers") => {
+                    let count = args
+                        .next()
+                        .and_then(|value| value.into_string().ok())
+                        .and_then(|value| value.parse::<usize>().ok())
+                        .filter(|count| *count > 0)
+                        .ok_or_else(|| "--workers requires a positive count".to_owned())?;
+                    workers = Some(count);
+                    continue;
+                }
                 Some(value) if value.starts_with('-') => {
                     return Err(format!("unknown argument: {value}"));
                 }
@@ -137,6 +167,7 @@ fn arguments() -> CheckResult<Option<Arguments>> {
         only,
         chunk,
         hash,
+        workers,
     }))
 }
 
@@ -183,7 +214,7 @@ fn read(path: &Path) -> CheckResult<Vec<u8>> {
 /// Decodes through the streaming API, each chunk in its own allocation so every boundary is a span boundary.
 fn streamed(input: &[u8], size: usize) -> CheckResult<JxlImage> {
     let mut chunks = input.chunks(size).map(Arc::<[u8]>::from);
-    let mut uninit = JxlImage::builder().tasks(Tasks::inline()).build_uninit();
+    let mut uninit = JxlImage::builder().tasks(tasks()).build_uninit();
     let mut image = loop {
         let ended = match chunks.next() {
             Some(chunk) => {
@@ -216,6 +247,7 @@ fn hash_case(directory: &Path, chunk: Option<usize>) -> CheckResult<String> {
     let input: Arc<[u8]> = Arc::from(read(&directory.join("input.jxl"))?);
     let mut image = match chunk {
         None => JxlImage::builder()
+            .tasks(tasks())
             .read_bytes(input)
             .map_err(|error| format!("decode failed: {error}"))?,
         Some(size) => streamed(&input, size)?,
@@ -225,8 +257,7 @@ fn hash_case(directory: &Path, chunk: Option<usize>) -> CheckResult<String> {
     let frames = image.num_loaded_keyframes();
     let mut hashes = Vec::with_capacity(frames);
     for index in 0..frames {
-        let render = image
-            .render_frame(index)
+        let render = render(&mut image, index)
             .map_err(|error| format!("frame {index} render failed: {error}"))?;
         let buffer = render.image_all_channels();
         let mut hash = 0xcbf2_9ce4_8422_2325u64;
@@ -272,7 +303,7 @@ fn run_case(directory: &Path, chunk: Option<usize>, report: &mut Report) -> Chec
     let prepared: CheckResult<JxlImage> = (|| {
         let mut image = match chunk {
             None => JxlImage::builder()
-                .tasks(Tasks::inline())
+                .tasks(tasks())
                 .read_bytes(input)
                 .map_err(|error| format!("decode failed: {error}"))?,
             Some(size) => streamed(&input, size)?,
@@ -307,8 +338,7 @@ fn run_case(directory: &Path, chunk: Option<usize>, report: &mut Report) -> Chec
             let expected = reference.read_frame()?;
             let start = Instant::now();
             let rendered: CheckResult<FrameBuffer> = (|| {
-                let render = image
-                    .render_frame(index)
+                let render = render(&mut image, index)
                     .map_err(|error| format!("frame {index} render failed: {error}"))?;
                 if render.keyframe_index() != index {
                     return Err(format!("frame {index} returned a different keyframe index"));
@@ -420,13 +450,31 @@ fn execute(args: &Arguments) -> CheckResult<bool> {
     Ok(failed == 0)
 }
 
+fn install_executor(workers: Option<usize>) -> CheckResult<()> {
+    let Some(count) = workers else {
+        return Ok(());
+    };
+    #[cfg(feature = "nagoya")]
+    {
+        let runtime = RUNTIME.get_or_init(|| nagoya::runtime::Runtime::new(count));
+        let executor = jxl_oxide::NagoyaExecutor(runtime.executor().clone_handle());
+        let _ = TASKS.set(Tasks::new(Arc::new(executor)));
+        Ok(())
+    }
+    #[cfg(not(feature = "nagoya"))]
+    {
+        let _ = count;
+        Err("--workers needs the nagoya feature".to_owned())
+    }
+}
+
 fn main() -> ExitCode {
     let result = match arguments() {
         Ok(None) => {
-            println!("Usage: ps-jxl-check <conformance-directory> [--only <name>]");
+            println!("Usage: ps-jxl-check <conformance-directory> [--only <name>] [--hash] [--chunk <bytes>] [--workers <count>]");
             return ExitCode::SUCCESS;
         }
-        Ok(Some(args)) => execute(&args),
+        Ok(Some(args)) => install_executor(args.workers).and_then(|()| execute(&args)),
         Err(error) => Err(error),
     };
     match result {

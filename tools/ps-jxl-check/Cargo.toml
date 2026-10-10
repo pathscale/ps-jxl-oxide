@@ -10,6 +10,10 @@ autobenches = false
 
 [dependencies]
 jxl-oxide = { path = "../../crates/jxl-oxide", default-features = false }
+nagoya = { version = "0.1.13", optional = true }
+
+[features]
+nagoya = ["dep:nagoya", "jxl-oxide/nagoya"]
 
 [[bin]]
 name = "ps-jxl-check"
