@@ -1,58 +1,69 @@
 [package]
-name = "jxl-oxide"
-description = "JPEG XL decoder written in pure Rust"
-authors = ["Wonwoo Choi <chwo9843@gmail.com>"]
-repository = "https://github.com/tirr-c/jxl-oxide.git"
+name = "ps-jxl-oxide"
+description = "JPEG XL decoder written in pure Rust: pathscale fork of jxl-oxide."
+authors = ["Wonwoo Choi <chwo9843@gmail.com>", "PathScale"]
+repository = "https://github.com/pathscale/ps-jxl-oxide"
 readme = "README.md"
 keywords = ["jpeg-xl", "decoder", "jxl-oxide"]
-categories = ["multimedia::images"]
+categories = ["multimedia::images", "no-std"]
 license = "MIT OR Apache-2.0"
 
-version = "0.12.6"
+version = "0.13.0"
 edition = "2024"
+
+[lib]
+name = "jxl_oxide"
 
 [dependencies]
 brotli-decompressor = { version = "5.0.0", default-features = false }
 tracing = { version = "0.1.40", default-features = false }
 
 [dependencies.jxl-bitstream]
-version = "1.1.0"
+package = "ps-jxl-bitstream"
+version = "0.13.0"
 path = "../jxl-bitstream"
 default-features = false
 
 [dependencies.jxl-color]
-version = "0.11.0"
+package = "ps-jxl-color"
+version = "0.13.0"
 path = "../jxl-color"
 default-features = false
 
 [dependencies.jxl-frame]
-version = "0.13.3"
+package = "ps-jxl-frame"
+version = "0.13.0"
 path = "../jxl-frame"
 default-features = false
 
 [dependencies.jxl-grid]
-version = "0.6.2"
+package = "ps-jxl-grid"
+version = "0.13.0"
 path = "../jxl-grid"
 default-features = false
 
 [dependencies.jxl-image]
+package = "ps-jxl-image"
 version = "0.13.0"
 path = "../jxl-image"
 default-features = false
 
 [dependencies.jxl-oxide-common]
-version = "1.0.0"
+package = "ps-jxl-oxide-common"
+version = "0.13.0"
 path = "../jxl-oxide-common"
 default-features = false
 
 [dependencies.jxl-render]
-version = "0.12.4"
+package = "ps-jxl-render"
+version = "0.13.0"
 path = "../jxl-render"
 default-features = false
 features = ["libm"]
 
 [dependencies.jxl-threadpool]
-version = "1.0.0"
+package = "ps-jxl-threadpool"
+version = "0.13.0"
 path = "../jxl-threadpool"
 default-features = false
 

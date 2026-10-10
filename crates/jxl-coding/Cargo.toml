@@ -1,21 +1,25 @@
 [package]
-name = "jxl-coding"
-description = "JPEG XL entropy decoder, part of jxl-oxide."
-authors = ["Wonwoo Choi <chwo9843@gmail.com>"]
-repository = "https://github.com/tirr-c/jxl-oxide.git"
+name = "ps-jxl-coding"
+description = "JPEG XL entropy decoder, part of jxl-oxide: pathscale fork of jxl-oxide."
+authors = ["Wonwoo Choi <chwo9843@gmail.com>", "PathScale"]
+repository = "https://github.com/pathscale/ps-jxl-oxide"
 readme = "README.md"
 keywords = ["jpeg-xl", "decoder", "jxl-oxide"]
-categories = ["multimedia::images"]
+categories = ["multimedia::images", "no-std"]
 license = "MIT OR Apache-2.0"
 
-version = "1.0.1"
+version = "0.13.0"
 edition = "2024"
+
+[lib]
+name = "jxl_coding"
 
 [dependencies]
 tracing = { version = "0.1.40", default-features = false }
 
 [dependencies.jxl-bitstream]
-version = "1.0.0"
+package = "ps-jxl-bitstream"
+version = "0.13.0"
 path = "../jxl-bitstream"
 default-features = false
 

@@ -9,7 +9,7 @@ autotests = false
 autobenches = false
 
 [dependencies]
-jxl-oxide = { path = "../../crates/jxl-oxide" }
+jxl-oxide = { path = "../../crates/jxl-oxide", package = "ps-jxl-oxide" }
 nagoya = { version = "0.1.13", optional = true }
 
 [features]
@@ -18,3 +18,4 @@ nagoya = ["dep:nagoya", "jxl-oxide/nagoya"]
 [[bin]]
 name = "ps-jxl-check"
 path = "src/main.rs"
+

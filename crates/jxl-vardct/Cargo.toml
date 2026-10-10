@@ -1,42 +1,50 @@
 [package]
-name = "jxl-vardct"
-description = "JPEG XL VarDCT frame representation, part of jxl-oxide"
-authors = ["Wonwoo Choi <chwo9843@gmail.com>"]
-repository = "https://github.com/tirr-c/jxl-oxide.git"
+name = "ps-jxl-vardct"
+description = "JPEG XL VarDCT frame representation, part of jxl-oxide: pathscale fork of jxl-oxide."
+authors = ["Wonwoo Choi <chwo9843@gmail.com>", "PathScale"]
+repository = "https://github.com/pathscale/ps-jxl-oxide"
 readme = "README.md"
 keywords = ["jpeg-xl", "decoder", "jxl-oxide"]
-categories = ["multimedia::images"]
+categories = ["multimedia::images", "no-std"]
 license = "MIT OR Apache-2.0"
 
-version = "0.11.1"
+version = "0.13.0"
 edition = "2024"
+
+[lib]
+name = "jxl_vardct"
 
 [dependencies]
 tracing = { version = "0.1.40", default-features = false }
 libm = { version = "0.2", default-features = false, optional = true }
 
 [dependencies.jxl-bitstream]
-version = "1.0.0"
+package = "ps-jxl-bitstream"
+version = "0.13.0"
 path = "../jxl-bitstream"
 default-features = false
 
 [dependencies.jxl-coding]
-version = "1.0.0"
+package = "ps-jxl-coding"
+version = "0.13.0"
 path = "../jxl-coding"
 default-features = false
 
 [dependencies.jxl-grid]
-version = "0.6.0"
+package = "ps-jxl-grid"
+version = "0.13.0"
 path = "../jxl-grid"
 default-features = false
 
 [dependencies.jxl-modular]
-version = "0.11.2"
+package = "ps-jxl-modular"
+version = "0.13.0"
 path = "../jxl-modular"
 default-features = false
 
 [dependencies.jxl-oxide-common]
-version = "1.0.0"
+package = "ps-jxl-oxide-common"
+version = "0.13.0"
 path = "../jxl-oxide-common"
 default-features = false
 
@@ -45,3 +53,4 @@ default = ["std"]
 std = ["tracing/std", "jxl-bitstream/std", "jxl-coding/std", "jxl-grid/std", "jxl-modular/std", "jxl-oxide-common/std"]
 # Float math for builds without std.
 libm = ["dep:libm"]
+
