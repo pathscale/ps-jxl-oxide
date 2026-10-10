@@ -101,6 +101,41 @@ impl<S: Sample> Modular<S> {
     pub fn into_image(self) -> Option<image::ModularImageDestination<S>> {
         self.inner.map(|x| x.image)
     }
+
+    /// Finishes transforms with the destination owned by one job on the inline executor.
+    pub async fn finish_with_tasks(
+        &mut self,
+        tasks: &jxl_threadpool::Tasks,
+        tracker: Option<&AllocTracker>,
+    ) -> Result<bool> {
+        if tasks.is_inline() {
+            let mut modular = core::mem::take(self);
+            let jobs: Vec<
+                alloc::boxed::Box<dyn FnOnce() -> (Self, Result<bool>) + Send + 'static>,
+            > = alloc::vec![alloc::boxed::Box::new(move || {
+                let result = if let Some(image) = modular.image_mut() {
+                    image.prepare_subimage().map(|subimage| subimage.finish())
+                } else {
+                    Ok(true)
+                };
+                (modular, result)
+            })];
+            let mut outputs = tasks
+                .run_all(jobs)
+                .await
+                .map_err(|_| Error::TaskCancelled)?;
+            let (modular, result) = outputs.pop().unwrap();
+            *self = modular;
+            result
+        } else if let Some(image) = self.image_mut() {
+            image
+                .prepare_subimage()?
+                .finish_with_tasks(tasks, tracker)
+                .await
+        } else {
+            Ok(true)
+        }
+    }
 }
 
 impl<S: Sample> Bundle<ModularParams<'_, '_>> for ModularData<S> {

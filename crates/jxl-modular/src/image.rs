@@ -805,6 +805,32 @@ impl<S: Sample> OwnedModularSubimage<S> {
         result
     }
 
+    fn finish_inline(&mut self) -> Result<bool> {
+        let OwnedRecursiveState {
+            header,
+            ma_ctx,
+            channels,
+            meta_channels,
+        } = self.recursive.take().expect("decoded recursive image");
+        let mut image = RecursiveModularImage {
+            header,
+            ma_ctx,
+            bit_depth: self.bit_depth,
+            channels,
+            meta_channels,
+            image_channels: self
+                .grids
+                .iter_mut()
+                .map(|grid| TransformedGrid::from(grid.as_subgrid_mut()))
+                .collect(),
+        };
+        let mut subimage = image.prepare_subimage()?;
+        subimage.partial = self.partial;
+        let complete = subimage.finish();
+        self.finish_pending = false;
+        Ok(complete)
+    }
+
     pub async fn finish_with_tasks(
         &mut self,
         tasks: &jxl_threadpool::Tasks,
@@ -812,6 +838,29 @@ impl<S: Sample> OwnedModularSubimage<S> {
     ) -> Result<bool> {
         if !self.finish_pending {
             return Ok(!self.partial);
+        }
+        if tasks.is_inline() {
+            // Move the sample owners into the job. Only its local views borrow them.
+            let mut owned = Self {
+                channel_info: alloc::sync::Arc::clone(&self.channel_info),
+                bit_depth: self.bit_depth,
+                grids: core::mem::take(&mut self.grids),
+                recursive: self.recursive.take(),
+                partial: self.partial,
+                finish_pending: self.finish_pending,
+            };
+            let jobs: Vec<Box<dyn FnOnce() -> (Self, Result<bool>) + Send + 'static>> =
+                alloc::vec![Box::new(move || {
+                    let result = owned.finish_inline();
+                    (owned, result)
+                })];
+            let mut outputs = tasks
+                .run_all(jobs)
+                .await
+                .map_err(|_| crate::Error::TaskCancelled)?;
+            let (owned, result) = outputs.pop().unwrap();
+            *self = owned;
+            return result;
         }
         let OwnedRecursiveState {
             header,

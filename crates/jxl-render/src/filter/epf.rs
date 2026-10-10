@@ -135,10 +135,16 @@ async fn run_epf_step<const STEP: usize>(
     let left = input.output_left();
     let right = left + width;
 
+    // The inline job owns the final planes; workers retain independent stripes.
+    let stripe_height = if tasks.is_inline() {
+        output_height.max(1)
+    } else {
+        STRIPE_HEIGHT
+    };
     let mut jobs: Vec<Box<dyn FnOnce() -> Stripe + Send + 'static>> =
-        Vec::with_capacity(output_height.div_ceil(STRIPE_HEIGHT));
-    for base_y in (0..output_height).step_by(STRIPE_HEIGHT) {
-        let job_height = (output_height - base_y).min(STRIPE_HEIGHT);
+        Vec::with_capacity(output_height.div_ceil(stripe_height));
+    for base_y in (0..output_height).step_by(stripe_height) {
+        let job_height = (output_height - base_y).min(stripe_height);
         let mut output = input.allocate_stripe(job_height)?;
         let mut sigma =
             AlignedGrid::with_alloc_tracker(width.div_ceil(8), 1, input.tracker.as_ref())?;

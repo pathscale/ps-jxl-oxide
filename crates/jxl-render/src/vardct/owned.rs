@@ -1,10 +1,10 @@
 use alloc::{boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
 
 use jxl_frame::{
-    FrameParser,
+    FrameHeader, FrameParser,
     data::{HfGlobal, LfGlobal, LfGroup, PassGroupParams, PassGroupParamsVardct},
 };
-use jxl_grid::AlignedGrid;
+use jxl_grid::{AlignedGrid, MutableSubgrid};
 use jxl_modular::{ChannelShift, Sample, image::TransformedModularSubimage};
 use jxl_threadpool::Tasks;
 
@@ -187,12 +187,17 @@ async fn render_inner<S: Sample>(
     let group_dim = frame_header.group_dim();
     let groups_per_row = frame_header.groups_per_row();
     let mut groups = Vec::new();
+    let mut inline_indices = Vec::new();
     for row in 0..modular_region.height.div_ceil(group_dim) {
         for col in 0..modular_region.width.div_ceil(group_dim) {
             let group_x = modular_region.left as u32 / group_dim + col;
             let group_y = modular_region.top as u32 / group_dim + row;
             let index = group_y * groups_per_row + group_x;
             if !lf_groups.contains_key(&frame_header.lf_group_idx_from_group_idx(index)) {
+                continue;
+            }
+            if tasks.is_inline() {
+                inline_indices.push(index);
                 continue;
             }
             let width = (modular_region.width - col * group_dim).min(group_dim);
@@ -207,6 +212,113 @@ async fn render_inner<S: Sample>(
                 channels: [x?, y?, b?],
             });
         }
+    }
+
+    if tasks.is_inline() {
+        let channels = shifts_cbycr.map(|shift| {
+            let (w8, h8) = shift.shift_size((
+                modular_region.width.div_ceil(8),
+                modular_region.height.div_ceil(8),
+            ));
+            AlignedGrid::with_alloc_tracker(w8 as usize * 8, h8 as usize * 8, tracker)
+        });
+        let [x, y, b] = channels;
+        let mut channels = [x?, y?, b?];
+        let task_frame = Arc::clone(frame);
+        let task_lf_global = Arc::clone(lf_global);
+        let task_hf_global = hf_global.clone();
+        let task_lf_groups = Arc::clone(lf_groups);
+        let mut task_parser = parser.clone();
+        // The final planes stay owned by this job through every coefficient pass.
+        // Group views are created and retired inside it, never sent to the executor.
+        let jobs: Vec<Job<_>> = vec![Box::new(move || -> Result<_> {
+            let frame_header = task_frame.header();
+            if let Some(hf_global) = task_hf_global.as_ref() {
+                for pass_idx in 0..frame_header.passes.num_passes {
+                    let has_modular = gmodular.modular.image().is_some();
+                    let pass_image = if let Some(image) = gmodular.modular.image_mut() {
+                        Some(
+                            image
+                                .prepare_groups(task_frame.pass_shifts())?
+                                .pass_groups
+                                .into_iter()
+                                .nth(pass_idx as usize)
+                                .unwrap(),
+                        )
+                    } else {
+                        None
+                    };
+                    let mut image_it = pass_image.map(|image| image.into_iter().enumerate());
+                    let mut first_error = None;
+                    for &index in &inline_indices {
+                        let modular = image_it
+                            .as_mut()
+                            .and_then(|images| images.find(|(i, _)| *i == index as usize))
+                            .map(|(_, image)| image);
+                        let mut group_parser;
+                        let parser = if has_modular {
+                            &mut task_parser
+                        } else {
+                            group_parser = task_parser.clone();
+                            &mut group_parser
+                        };
+                        let grids =
+                            coefficient_views(&mut channels, index, frame_header, modular_region);
+                        let result = decode_group(
+                            &task_frame,
+                            &task_lf_global,
+                            hf_global,
+                            &task_lf_groups,
+                            index,
+                            grids,
+                            pass_idx,
+                            modular,
+                            parser,
+                        );
+                        if first_error.is_none() {
+                            first_error = result.err();
+                        }
+                    }
+                    drop(image_it);
+                    if let Some(error) = first_error {
+                        return Err(error);
+                    }
+                }
+            }
+            for &index in &inline_indices {
+                let grids =
+                    coefficient_views(&mut channels, index, frame_header, modular_region);
+                reconstruct_group(
+                    &task_frame,
+                    &task_lf_global,
+                    task_hf_global.as_deref(),
+                    &task_lf_groups,
+                    &lf_xyb,
+                    index,
+                    grids,
+                    aligned_region,
+                    subsampled,
+                );
+            }
+            if let Some(image) = gmodular.modular.image_mut() {
+                image.prepare_subimage()?.finish();
+            }
+            Ok((channels, gmodular, task_parser))
+        })];
+        let mut outputs = tasks
+            .run_all(jobs)
+            .await
+            .map_err(|_| Error::Color(jxl_color::Error::TaskCancelled))?;
+        let (channels, gmodular, task_parser) = outputs.pop().unwrap()?;
+        *parser = task_parser;
+        let mut fb = ImageWithRegion::new(3, tracker);
+        for (buffer, shift) in channels.into_iter().zip(shifts_cbycr) {
+            fb.append_channel_shifted(ImageBuffer::F32(buffer), modular_region, shift);
+        }
+        if gmodular.modular.image().is_some() {
+            fb.extend_from_gmodular(gmodular);
+        }
+        return Ok(fb);
     }
 
     if let Some(hf_global) = hf_global.as_ref() {
@@ -226,7 +338,8 @@ async fn render_inner<S: Sample>(
                                 &lf_global,
                                 &hf_global,
                                 &lf_groups,
-                                &mut group,
+                                group.index,
+                                group.channels.each_mut().map(AlignedGrid::as_subgrid_mut),
                                 pass_idx,
                                 None,
                                 &mut task_parser,
@@ -269,7 +382,8 @@ async fn render_inner<S: Sample>(
                             &task_lf_global,
                             &task_hf_global,
                             &task_lf_groups,
-                            group,
+                            group.index,
+                            group.channels.each_mut().map(AlignedGrid::as_subgrid_mut),
                             pass_idx,
                             modular,
                             &mut task_parser,
@@ -311,7 +425,8 @@ async fn render_inner<S: Sample>(
                     hf_global.as_deref(),
                     &lf_groups,
                     &lf_xyb,
-                    &mut group,
+                    group.index,
+                    group.channels.each_mut().map(AlignedGrid::as_subgrid_mut),
                     aligned_region,
                     subsampled,
                 );
@@ -324,8 +439,8 @@ async fn render_inner<S: Sample>(
         .await
         .map_err(|_| Error::Color(jxl_color::Error::TaskCancelled))?;
 
-    // The current framebuffer requires one placement copy. Allocate it after the
-    // coefficient stages and release each group as soon as its rows are placed.
+    // Worker outputs still require one placement copy into the contiguous framebuffer.
+    // Release each group as soon as its rows are placed.
     let mut fb = ImageWithRegion::new(3, tracker);
     for shift in shifts_cbycr {
         let (w8, h8) = shift.shift_size((
@@ -359,40 +474,63 @@ async fn render_inner<S: Sample>(
     Ok(fb)
 }
 
+/// Borrows one group from the inline job's final coefficient planes.
+fn coefficient_views<'a>(
+    channels: &'a mut [AlignedGrid<f32>; 3],
+    index: u32,
+    frame_header: &FrameHeader,
+    region: Region,
+) -> [MutableSubgrid<'a, f32>; 3] {
+    let group_dim = frame_header.group_dim();
+    let groups_per_row = frame_header.groups_per_row();
+    let left = index % groups_per_row * group_dim - region.left as u32;
+    let top = index / groups_per_row * group_dim - region.top as u32;
+    let width = (region.width - left).min(group_dim);
+    let height = (region.height - top).min(group_dim);
+    let mut channel = 0;
+    channels.each_mut().map(|grid| {
+        let shift = ChannelShift::from_jpeg_upsampling(frame_header.jpeg_upsampling, channel);
+        channel += 1;
+        let (w8, h8) = shift.shift_size((width.div_ceil(8), height.div_ceil(8)));
+        let left = (left >> shift.hshift()) as usize;
+        let top = (top >> shift.vshift()) as usize;
+        grid.as_subgrid_mut()
+            .subgrid(left..left + w8 as usize * 8, top..top + h8 as usize * 8)
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn decode_group<S: Sample>(
     frame: &IndexedFrame,
     lf_global: &LfGlobal<S>,
     hf_global: &HfGlobal,
     lf_groups: &BTreeMap<u32, LfGroup<S>>,
-    group: &mut CoefficientGroup,
+    index: u32,
+    grids: [MutableSubgrid<'_, f32>; 3],
     pass_idx: u32,
     modular: Option<TransformedModularSubimage<S>>,
     parser: &mut FrameParser,
 ) -> Result<()> {
     let frame_header = frame.header();
-    let lf_group = &lf_groups[&frame_header.lf_group_idx_from_group_idx(group.index)];
+    let lf_group = &lf_groups[&frame_header.lf_group_idx_from_group_idx(index)];
     if lf_group.hf_meta.is_none() {
         return Ok(());
     }
-    let bitstream = match frame.pass_group_bitstream_with_parser(pass_idx, group.index, parser) {
+    let bitstream = match frame.pass_group_bitstream_with_parser(pass_idx, index, parser) {
         Some(Ok(bitstream)) => bitstream,
         Some(Err(error)) => return Err(error.into()),
         None => return Ok(()),
     };
     let allow_partial = bitstream.partial;
     let mut bitstream = bitstream.bitstream;
-    let mut grids = group
-        .channels
-        .each_mut()
-        .map(|grid| grid.as_subgrid_mut().into_i32());
+    let mut grids = grids.map(MutableSubgrid::into_i32);
     let result = jxl_frame::data::decode_pass_group(
         &mut bitstream,
         PassGroupParams {
             frame_header,
             lf_group,
             pass_idx,
-            group_idx: group.index,
+            group_idx: index,
             global_ma_config: lf_global.gmodular.ma_config(),
             modular,
             vardct: Some(PassGroupParamsVardct {
@@ -417,16 +555,16 @@ fn reconstruct_group<S: Sample>(
     hf_global: Option<&HfGlobal>,
     lf_groups: &BTreeMap<u32, LfGroup<S>>,
     lf_xyb: &ImageWithRegion,
-    group: &mut CoefficientGroup,
+    index: u32,
+    mut grids: [MutableSubgrid<'_, f32>; 3],
     aligned_region: Region,
     subsampled: bool,
 ) {
     let frame_header = frame.header();
     let group_dim = frame_header.group_dim();
-    let group_x = group.index % frame_header.groups_per_row();
-    let group_y = group.index / frame_header.groups_per_row();
-    let lf_group = &lf_groups[&frame_header.lf_group_idx_from_group_idx(group.index)];
-    let mut grids = group.channels.each_mut().map(AlignedGrid::as_subgrid_mut);
+    let group_x = index % frame_header.groups_per_row();
+    let group_y = index / frame_header.groups_per_row();
+    let lf_group = &lf_groups[&frame_header.lf_group_idx_from_group_idx(index)];
     let group_region = Region {
         left: (group_x * group_dim) as i32,
         top: (group_y * group_dim) as i32,
@@ -437,12 +575,12 @@ fn reconstruct_group<S: Sample>(
         || hf_global.is_none()
         || group_region.intersection(aligned_region).is_empty()
     {
-        super::transform_with_lf_grouped(lf_xyb, &mut grids, group.index, frame_header, lf_groups);
+        super::transform_with_lf_grouped(lf_xyb, &mut grids, index, frame_header, lf_groups);
         return;
     }
     super::dequant_hf_varblock_grouped(
         &mut grids,
-        group.index,
+        index,
         frame.image_header(),
         frame_header,
         lf_global,
@@ -470,5 +608,5 @@ fn reconstruct_group<S: Sample>(
             &lf_global.vardct.as_ref().unwrap().lf_chan_corr,
         );
     }
-    super::transform_with_lf_grouped(lf_xyb, &mut grids, group.index, frame_header, lf_groups);
+    super::transform_with_lf_grouped(lf_xyb, &mut grids, index, frame_header, lf_groups);
 }

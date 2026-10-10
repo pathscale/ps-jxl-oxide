@@ -108,17 +108,22 @@ impl FilterImage {
         output[right..].copy_from_slice(&source[right..]);
     }
 
-    pub(super) fn with_stripes(&self, stripes: Vec<Stripe>) -> Self {
+    pub(super) fn with_stripes(&self, mut stripes: Vec<Stripe>) -> Self {
+        let storage = if stripes.len() == 1 {
+            Storage::Planes(stripes.pop().unwrap())
+        } else {
+            Storage::Stripes(stripes)
+        };
         Self {
             region: self.output_region,
             filter_region: self.filter_region,
             output_region: self.output_region,
             tracker: self.tracker.clone(),
-            storage: Storage::Stripes(stripes),
+            storage,
         }
     }
 
-    /// Performs the single placement copy required by the contiguous consumer.
+    /// Moves full planes into the consumer, flattening only worker stripes.
     pub(crate) fn write_to(self, image: &mut ImageWithRegion) -> Result<()> {
         let Self {
             region,

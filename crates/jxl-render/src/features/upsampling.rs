@@ -149,67 +149,76 @@ async fn upsample_inner<const K: usize, const NW: usize>(
     }
     let weights_quarter = Arc::new(weights_quarter);
 
+    // One inline job writes the final grid, keeping its padded source scratch bounded.
+    let stripe_height = if tasks.is_inline() {
+        frame_height
+    } else {
+        STRIPE_HEIGHT
+    };
     let mut jobs: Vec<Box<dyn FnOnce() -> AlignedGrid<f32> + Send + 'static>> =
-        Vec::with_capacity(frame_height.div_ceil(STRIPE_HEIGHT));
-    for base_y in (0..frame_height).step_by(STRIPE_HEIGHT) {
-        let job_height = (frame_height - base_y).min(STRIPE_HEIGHT);
+        Vec::with_capacity(frame_height.div_ceil(stripe_height));
+    for base_y in (0..frame_height).step_by(stripe_height) {
+        let job_height = (frame_height - base_y).min(stripe_height);
         let mut output = AlignedGrid::with_alloc_tracker(frame_width, job_height, tracker)?;
         let grid = grid.clone();
         let padded_x = Arc::clone(&padded_x);
         let weights_quarter = Arc::clone(&weights_quarter);
 
         jobs.push(Box::new(move || {
-            // A private padded copy of the source rows this stripe reads, so the kernel
-            // indexes one contiguous buffer exactly as the serial version did.
-            let first_ref = base_y / K;
-            let last_ref = (base_y + job_height - 1) / K;
-            let padded_width = grid_width + PADDING * 2;
-            let padded_rows = last_ref - first_ref + 5;
-            let padded_x = padded_x.buf();
-            let mut padded = vec![0.0f32; padded_width * padded_rows];
-            for (row_idx, row) in padded.chunks_exact_mut(padded_width).enumerate() {
-                if let Some(source) = grid.padded_row(first_ref + row_idx) {
-                    for (sample, &source_x) in row.iter_mut().zip(padded_x) {
-                        if source_x != usize::MAX {
-                            *sample = source[source_x];
+            for block_y in (base_y..base_y + job_height).step_by(STRIPE_HEIGHT) {
+                let block_height = (base_y + job_height - block_y).min(STRIPE_HEIGHT);
+                // A private padded copy of the source rows this stripe reads, so the kernel
+                // indexes one contiguous buffer exactly as the serial version did.
+                let first_ref = block_y / K;
+                let last_ref = (block_y + block_height - 1) / K;
+                let padded_width = grid_width + PADDING * 2;
+                let padded_rows = last_ref - first_ref + 5;
+                let padded_x = padded_x.buf();
+                let mut padded = vec![0.0f32; padded_width * padded_rows];
+                for (row_idx, row) in padded.chunks_exact_mut(padded_width).enumerate() {
+                    if let Some(source) = grid.padded_row(first_ref + row_idx) {
+                        for (sample, &source_x) in row.iter_mut().zip(padded_x) {
+                            if source_x != usize::MAX {
+                                *sample = source[source_x];
+                            }
                         }
                     }
                 }
-            }
 
-            let grid_buf = output.buf_mut();
-            for dy in 0..job_height {
-                let y = base_y + dy;
-                let ref_y = y / K - first_ref;
-                let mat_y = (y % K).min(K - y % K - 1);
-                let flip_v = y % K >= mat_n;
-                for x in 0..frame_width {
-                    let ref_x = x / K;
-                    let mat_x = (x % K).min(K - x % K - 1);
-                    let flip_h = x % K >= mat_n;
+                let grid_buf = output.buf_mut();
+                for dy in 0..block_height {
+                    let y = block_y + dy;
+                    let ref_y = y / K - first_ref;
+                    let mat_y = (y % K).min(K - y % K - 1);
+                    let flip_v = y % K >= mat_n;
+                    for x in 0..frame_width {
+                        let ref_x = x / K;
+                        let mat_x = (x % K).min(K - x % K - 1);
+                        let flip_h = x % K >= mat_n;
 
-                    let kernel = &weights_quarter[mat_y * mat_n + mat_x];
-                    let mut sum = 0.0f32;
-                    let mut min = f32::INFINITY;
-                    let mut max = -f32::INFINITY;
-                    for iy in 0..5 {
-                        let ky = if flip_v { 4 - iy } else { iy };
-                        for ix in 0..5 {
-                            let kx = if flip_h { 4 - ix } else { ix };
-                            let sample = padded[(ref_y + iy) * padded_width + (ref_x + ix)];
-                            sum += kernel[ky * 5 + kx] * sample;
-                            min = min.min(sample);
-                            max = max.max(sample);
+                        let kernel = &weights_quarter[mat_y * mat_n + mat_x];
+                        let mut sum = 0.0f32;
+                        let mut min = f32::INFINITY;
+                        let mut max = -f32::INFINITY;
+                        for iy in 0..5 {
+                            let ky = if flip_v { 4 - iy } else { iy };
+                            for ix in 0..5 {
+                                let kx = if flip_h { 4 - ix } else { ix };
+                                let sample = padded[(ref_y + iy) * padded_width + (ref_x + ix)];
+                                sum += kernel[ky * 5 + kx] * sample;
+                                min = min.min(sample);
+                                max = max.max(sample);
+                            }
                         }
-                    }
 
-                    grid_buf[dy * frame_width + x] = if !min.is_finite() {
-                        // This happens if all samples are NaN. f32::clamp would panic
-                        // in this case.
-                        f32::NAN
-                    } else {
-                        sum.clamp(min, max)
-                    };
+                        grid_buf[(y - base_y) * frame_width + x] = if !min.is_finite() {
+                            // This happens if all samples are NaN. f32::clamp would panic
+                            // in this case.
+                            f32::NAN
+                        } else {
+                            sum.clamp(min, max)
+                        };
+                    }
                 }
             }
             output
