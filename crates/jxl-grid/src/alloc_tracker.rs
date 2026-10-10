@@ -1,7 +1,5 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use alloc::sync::Arc;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 /// Allocation tracker with total memory limit.
 #[derive(Debug, Clone)]
@@ -28,7 +26,7 @@ impl AllocTracker {
     ///
     /// Returns an error if the allocation exceeds the current limit.
     pub fn alloc<T>(&self, count: usize) -> Result<AllocHandle, crate::OutOfMemory> {
-        let bytes = count * std::mem::size_of::<T>();
+        let bytes = count * core::mem::size_of::<T>();
         let result = self.inner.bytes_left.fetch_update(
             Ordering::Relaxed,
             Ordering::Relaxed,

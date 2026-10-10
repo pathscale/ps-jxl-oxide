@@ -1,4 +1,4 @@
-use std::{ops::RangeBounds, ptr::NonNull};
+use core::{ops::RangeBounds, ptr::NonNull};
 
 use crate::SimdVector;
 
@@ -9,7 +9,7 @@ pub struct SharedSubgrid<'g, V = f32> {
     width: usize,
     height: usize,
     stride: usize,
-    _marker: std::marker::PhantomData<&'g [V]>,
+    _marker: core::marker::PhantomData<&'g [V]>,
 }
 
 unsafe impl<'g, V> Send for SharedSubgrid<'g, V> where &'g [V]: Send {}
@@ -152,7 +152,7 @@ impl<'g, V> SharedSubgrid<'g, V> {
                 .checked_mul(self.stride)
                 .expect("subgrid row offset overflows usize");
             let ptr = self.ptr.as_ptr().add(offset);
-            std::slice::from_raw_parts(ptr as *const _, self.width)
+            core::slice::from_raw_parts(ptr as *const _, self.width)
         })
     }
 
@@ -201,7 +201,7 @@ impl<'g, V> SharedSubgrid<'g, V> {
         range_x: impl RangeBounds<usize>,
         range_y: impl RangeBounds<usize>,
     ) -> SharedSubgrid<'g, V> {
-        use std::ops::Bound;
+        use core::ops::Bound;
 
         let left = match range_x.start_bound() {
             Bound::Included(&v) => v,
@@ -259,11 +259,11 @@ impl<'g> SharedSubgrid<'g, f32> {
         assert!(
             V::available(),
             "Vector type `{}` is not supported by current CPU",
-            std::any::type_name::<V>()
+            core::any::type_name::<V>()
         );
 
         let mask = V::SIZE - 1;
-        let align_mask = std::mem::align_of::<V>() - 1;
+        let align_mask = core::mem::align_of::<V>() - 1;
 
         (self.ptr.as_ptr() as usize & align_mask == 0
             && self.width & mask == 0

@@ -1,8 +1,8 @@
 use super::box_header::*;
 use super::{BitstreamKind, ContainerParser, DetectState, JxlpIndexState};
+use crate::Section;
 use crate::consts;
 use crate::error::{BitstreamResult, Error};
-use crate::Section;
 
 /// Iterator that emits events over retained immutable input ranges.
 #[derive(Debug)]
@@ -13,7 +13,10 @@ pub struct ParseEvents<'inner> {
 
 impl<'inner> ParseEvents<'inner> {
     pub(super) fn new(parser: &'inner mut ContainerParser) -> Self {
-        Self { inner: parser, finished: false }
+        Self {
+            inner: parser,
+            finished: false,
+        }
     }
 
     fn take_payload(&mut self, count: usize) -> BitstreamResult<Section> {
@@ -31,15 +34,25 @@ impl<'inner> ParseEvents<'inner> {
     fn emit_single(&mut self) -> BitstreamResult<Option<ParseEvent>> {
         loop {
             match &mut self.inner.state {
-                DetectState::InCodestream { pending_no_more_aux_box: pending @ true, .. } => {
+                DetectState::InCodestream {
+                    pending_no_more_aux_box: pending @ true,
+                    ..
+                } => {
                     *pending = false;
                     return Ok(Some(ParseEvent::NoMoreAuxBox));
                 }
-                DetectState::InCodestream { bytes_left: Some(0), .. } => {
+                DetectState::InCodestream {
+                    bytes_left: Some(0),
+                    ..
+                } => {
                     self.inner.state = DetectState::WaitingBoxHeader;
                     continue;
                 }
-                DetectState::InAuxBox { header, brotli_box_type, bytes_left: Some(0) } => {
+                DetectState::InAuxBox {
+                    header,
+                    brotli_box_type,
+                    bytes_left: Some(0),
+                } => {
                     let ty = brotli_box_type.unwrap_or(header.box_type());
                     self.inner.state = DetectState::WaitingBoxHeader;
                     return Ok(Some(ParseEvent::AuxBoxEnd(ty)));
@@ -72,7 +85,9 @@ impl<'inner> ParseEvents<'inner> {
                     } else if !consts::CODESTREAM_SIG.starts_with(&signature[..count]) {
                         kind = Some(BitstreamKind::Invalid);
                     }
-                    let Some(kind) = kind else { return Ok(None); };
+                    let Some(kind) = kind else {
+                        return Ok(None);
+                    };
                     self.inner.state = DetectState::InCodestream {
                         kind,
                         bytes_left: None,
@@ -87,12 +102,17 @@ impl<'inner> ParseEvents<'inner> {
                     if count == 8 && bytes[..4] == [0, 0, 0, 1] {
                         count = self.prefix(&mut bytes);
                     }
-                    let HeaderParseResult::Done { header, header_size } =
-                        ContainerBoxHeader::parse(&bytes[..count])?
-                    else { return Ok(None); };
+                    let HeaderParseResult::Done {
+                        header,
+                        header_size,
+                    } = ContainerBoxHeader::parse(&bytes[..count])?
+                    else {
+                        return Ok(None);
+                    };
                     self.inner.cursor += header_size;
                     let ty = header.box_type();
-                    let bytes_left = header.box_size()
+                    let bytes_left = header
+                        .box_size()
                         .map(|size| usize::try_from(size).map_err(|_| Error::InvalidBox))
                         .transpose()?;
                     if ty == ContainerBoxType::CODESTREAM {
@@ -112,7 +132,8 @@ impl<'inner> ParseEvents<'inner> {
                         self.inner.jxlp_index_state = match self.inner.jxlp_index_state {
                             JxlpIndexState::Initial => JxlpIndexState::Jxlp(0),
                             JxlpIndexState::Jxlp(index) => JxlpIndexState::Jxlp(
-                                index.checked_add(1)
+                                index
+                                    .checked_add(1)
                                     .filter(|index| *index <= 0x7fffffff)
                                     .ok_or(Error::InvalidBox)?,
                             ),
@@ -154,7 +175,8 @@ impl<'inner> ParseEvents<'inner> {
                     if is_last {
                         self.inner.jxlp_index_state = JxlpIndexState::JxlpFinished;
                     }
-                    let bytes_left = header.box_size()
+                    let bytes_left = header
+                        .box_size()
                         .map(|size| {
                             let size = size.checked_sub(4).ok_or(Error::InvalidBox)?;
                             usize::try_from(size).map_err(|_| Error::InvalidBox)
@@ -167,7 +189,11 @@ impl<'inner> ParseEvents<'inner> {
                     };
                 }
 
-                DetectState::InCodestream { kind, bytes_left, pending_no_more_aux_box } => {
+                DetectState::InCodestream {
+                    kind,
+                    bytes_left,
+                    pending_no_more_aux_box,
+                } => {
                     let count = bytes_left.unwrap_or(available).min(available);
                     let payload = self.take_payload(count)?;
                     self.inner.state = DetectState::InCodestream {
@@ -178,9 +204,11 @@ impl<'inner> ParseEvents<'inner> {
                     return Ok(Some(ParseEvent::Codestream(payload)));
                 }
 
-                DetectState::InAuxBox { header, brotli_box_type: None, bytes_left }
-                    if header.box_type() == ContainerBoxType::BROTLI_COMPRESSED =>
-                {
+                DetectState::InAuxBox {
+                    header,
+                    brotli_box_type: None,
+                    bytes_left,
+                } if header.box_type() == ContainerBoxType::BROTLI_COMPRESSED => {
                     let mut ty = [0u8; 4];
                     if self.prefix(&mut ty) != 4 {
                         return Ok(None);
@@ -204,7 +232,11 @@ impl<'inner> ParseEvents<'inner> {
                     }));
                 }
 
-                DetectState::InAuxBox { header, brotli_box_type, bytes_left } => {
+                DetectState::InAuxBox {
+                    header,
+                    brotli_box_type,
+                    bytes_left,
+                } => {
                     let ty = brotli_box_type.unwrap_or(header.box_type());
                     let count = bytes_left.unwrap_or(available).min(available);
                     let payload = self.take_payload(count)?;
@@ -265,4 +297,3 @@ pub enum ParseEvent {
     /// Current auxiliary box has ended.
     AuxBoxEnd(ContainerBoxType),
 }
-

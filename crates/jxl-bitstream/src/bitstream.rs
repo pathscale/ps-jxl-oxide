@@ -17,8 +17,8 @@ pub struct Bitstream<'buf> {
     remaining_buf_bits: usize,
 }
 
-impl std::fmt::Debug for Bitstream<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Bitstream<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Bitstream")
             .field(
                 "bytes",
@@ -73,9 +73,14 @@ impl<'buf> Bitstream<'buf> {
     }
 
     /// Describes bytes from this reader's source, when it is span-backed.
-    pub fn source_section(&self, range: std::ops::Range<usize>) -> Option<BitstreamResult<Section>> {
+    pub fn source_section(
+        &self,
+        range: core::ops::Range<usize>,
+    ) -> Option<BitstreamResult<Section>> {
         self.spans.map(|spans| {
-            let start = self.logical_start.checked_add(range.start)
+            let start = self
+                .logical_start
+                .checked_add(range.start)
                 .ok_or(Error::ValidationFailed("section origin overflow"))?;
             Section::new(start, spans.slice(range)?)
         })
@@ -101,7 +106,7 @@ impl Bitstream<'_> {
             self.remaining_bytes -= read_bytes;
             // SAFETY: read_bytes < 8, self.bytes.len() >= 8 (from the pattern).
             self.bytes = unsafe {
-                std::slice::from_raw_parts(
+                core::slice::from_raw_parts(
                     self.bytes.as_ptr().add(read_bytes),
                     self.bytes.len() - read_bytes,
                 )
@@ -194,14 +199,14 @@ impl Bitstream<'_> {
     /// Consumes bits in bit buffer.
     ///
     /// # Errors
-    /// This method returns `Err(Io(std::io::ErrorKind::UnexpectedEof))` when there are not enough
+    /// This method returns `Err(Error::UnexpectedEof)` when there are not enough
     /// bits in the bit buffer.
     #[inline]
     pub fn consume_bits(&mut self, n: usize) -> BitstreamResult<()> {
         self.remaining_buf_bits = self
             .remaining_buf_bits
             .checked_sub(n)
-            .ok_or(Error::Io(std::io::ErrorKind::UnexpectedEof.into()))?;
+            .ok_or(Error::UnexpectedEof)?;
         self.num_read_bits += n;
         self.buf >>= n;
         Ok(())
@@ -210,14 +215,14 @@ impl Bitstream<'_> {
     /// Consumes bits in bit buffer.
     ///
     /// # Errors
-    /// This method returns `Err(Io(std::io::ErrorKind::UnexpectedEof))` when there are not enough
+    /// This method returns `Err(Error::UnexpectedEof)` when there are not enough
     /// bits in the bit buffer.
     #[inline]
     pub fn consume_bits_const<const N: usize>(&mut self) -> BitstreamResult<()> {
         self.remaining_buf_bits = self
             .remaining_buf_bits
             .checked_sub(N)
-            .ok_or(Error::Io(std::io::ErrorKind::UnexpectedEof.into()))?;
+            .ok_or(Error::UnexpectedEof)?;
         self.num_read_bits += N;
         self.buf >>= N;
         Ok(())
@@ -244,12 +249,14 @@ impl Bitstream<'_> {
         self.num_read_bits += self.remaining_buf_bits;
         self.buf = 0;
         self.remaining_buf_bits = 0;
-        let available = self.remaining_bytes.checked_mul(8)
+        let available = self
+            .remaining_bytes
+            .checked_mul(8)
             .ok_or(Error::ValidationFailed("bitstream length overflow"))?;
         if n > available {
             self.num_read_bits += available;
             self.skip_bytes(self.remaining_bytes);
-            return Err(Error::Io(std::io::ErrorKind::UnexpectedEof.into()));
+            return Err(Error::UnexpectedEof);
         }
 
         self.skip_bytes(n / 8);
@@ -370,7 +377,7 @@ impl Bitstream<'_> {
     pub fn read_enum<E: TryFrom<u32>>(&mut self) -> BitstreamResult<E> {
         let v = self.read_u32(0, 1, 2 + U(4), 18 + U(6))?;
         E::try_from(v).map_err(|_| Error::InvalidEnum {
-            name: std::any::type_name::<E>(),
+            name: core::any::type_name::<E>(),
             value: v,
         })
     }
@@ -397,11 +404,10 @@ impl From<U> for U32Specifier {
     }
 }
 
-impl std::ops::Add<U> for u32 {
+impl core::ops::Add<U> for u32 {
     type Output = U32Specifier;
 
     fn add(self, rhs: U) -> Self::Output {
         U32Specifier::BitsOffset(self, rhs.0)
     }
 }
-

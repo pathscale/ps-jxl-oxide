@@ -1,6 +1,6 @@
 //! Types for JPEG XL container format.
 
-use std::sync::Arc;
+use alloc::sync::Arc;
 
 use crate::{BitstreamResult, Error, Spans};
 
@@ -107,30 +107,35 @@ impl ContainerParser {
             return Err(Error::InvalidBox);
         }
         if self.cursor != self.source.len() {
-            return Err(Error::Io(std::io::ErrorKind::UnexpectedEof.into()));
+            return Err(Error::UnexpectedEof);
         }
         if matches!(self.jxlp_index_state, JxlpIndexState::Jxlp(_)) {
-            return Err(Error::Io(std::io::ErrorKind::UnexpectedEof.into()));
+            return Err(Error::UnexpectedEof);
         }
         let complete = match self.state {
             DetectState::WaitingBoxHeader => {
                 !matches!(self.jxlp_index_state, JxlpIndexState::Initial)
             }
-            DetectState::InAuxBox { ref header, brotli_box_type, bytes_left: None } => {
+            DetectState::InAuxBox {
+                ref header,
+                brotli_box_type,
+                bytes_left: None,
+            } => {
                 !matches!(self.jxlp_index_state, JxlpIndexState::Initial)
                     && (header.box_type() != ContainerBoxType::BROTLI_COMPRESSED
                         || brotli_box_type.is_some())
             }
-            DetectState::InCodestream { kind, bytes_left: None, .. } => {
-                kind != BitstreamKind::Invalid
-            }
+            DetectState::InCodestream {
+                kind,
+                bytes_left: None,
+                ..
+            } => kind != BitstreamKind::Invalid,
             _ => false,
         };
         if !complete {
-            return Err(Error::Io(std::io::ErrorKind::UnexpectedEof.into()));
+            return Err(Error::UnexpectedEof);
         }
         self.finalized = true;
         Ok(())
     }
 }
-

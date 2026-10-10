@@ -1,4 +1,5 @@
-use std::{ops::RangeBounds, ptr::NonNull};
+use alloc::vec::Vec;
+use core::{ops::RangeBounds, ptr::NonNull};
 
 use crate::{SharedSubgrid, SimdVector};
 
@@ -10,7 +11,7 @@ pub struct MutableSubgrid<'g, V = f32> {
     width: usize,
     height: usize,
     stride: usize,
-    _marker: std::marker::PhantomData<&'g mut [V]>,
+    _marker: core::marker::PhantomData<&'g mut [V]>,
 }
 
 // SAFETY: All `MutableSubgrid`s are disjoint, so they're semantically identical as `&mut [V]`.
@@ -194,7 +195,7 @@ impl<'g, V> MutableSubgrid<'g, V> {
                 .checked_mul(self.stride)
                 .expect("subgrid row offset overflows usize");
             let ptr = self.ptr.as_ptr().add(offset);
-            std::slice::from_raw_parts(ptr as *const _, self.width)
+            core::slice::from_raw_parts(ptr as *const _, self.width)
         })
     }
 
@@ -253,7 +254,7 @@ impl<'g, V> MutableSubgrid<'g, V> {
                 .checked_mul(self.stride)
                 .expect("subgrid row offset overflows usize");
             let ptr = self.ptr.as_ptr().add(offset);
-            std::slice::from_raw_parts_mut(ptr, self.width)
+            core::slice::from_raw_parts_mut(ptr, self.width)
         })
     }
 
@@ -265,13 +266,13 @@ impl<'g, V> MutableSubgrid<'g, V> {
     pub fn swap(&mut self, (ax, ay): (usize, usize), (bx, by): (usize, usize)) {
         let a = self.get_ptr(ax, ay);
         let b = self.get_ptr(bx, by);
-        if std::ptr::eq(a, b) {
+        if core::ptr::eq(a, b) {
             return;
         }
 
         // SAFETY: `a` and `b` are valid and aligned.
         unsafe {
-            std::ptr::swap(a, b);
+            core::ptr::swap(a, b);
         }
     }
 
@@ -296,7 +297,7 @@ impl<'g, V> MutableSubgrid<'g, V> {
         range_x: impl RangeBounds<usize>,
         range_y: impl RangeBounds<usize>,
     ) -> MutableSubgrid<'g, V> {
-        use std::ops::Bound;
+        use core::ops::Bound;
 
         let left = match range_x.start_bound() {
             Bound::Included(&v) => v,
@@ -432,7 +433,7 @@ impl<'g, V> MutableSubgrid<'g, V> {
         assert_eq!(self.stride, right.stride);
         assert_eq!(self.height, right.height);
         assert!(self.stride >= self.width + right.width);
-        assert!(std::ptr::eq(
+        assert!(core::ptr::eq(
             self.get_ptr_wrapping(self.width, 0) as *const _,
             right.ptr.as_ptr() as *const _,
         ));
@@ -456,7 +457,7 @@ impl<'g, V> MutableSubgrid<'g, V> {
         assert_eq!(self.split_base, bottom.split_base);
         assert_eq!(self.stride, bottom.stride);
         assert_eq!(self.width, bottom.width);
-        assert!(std::ptr::eq(
+        assert!(core::ptr::eq(
             self.get_ptr_wrapping(0, self.height) as *const _,
             bottom.ptr.as_ptr() as *const _,
         ));
@@ -563,11 +564,11 @@ impl MutableSubgrid<'_, f32> {
         assert!(
             V::available(),
             "Vector type `{}` is not supported by current CPU",
-            std::any::type_name::<V>()
+            core::any::type_name::<V>()
         );
 
         let mask = V::SIZE - 1;
-        let align_mask = std::mem::align_of::<V>() - 1;
+        let align_mask = core::mem::align_of::<V>() - 1;
 
         (self.ptr.as_ptr() as usize & align_mask == 0
             && self.width & mask == 0

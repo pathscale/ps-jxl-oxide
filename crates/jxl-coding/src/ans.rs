@@ -1,3 +1,5 @@
+use alloc::{vec, vec::Vec};
+
 use jxl_bitstream::Bitstream;
 
 use crate::{CodingResult, Error};
@@ -23,7 +25,7 @@ struct Bucket {
 }
 
 const _: () = {
-    ["size of `struct Bucket`"][std::mem::size_of::<Bucket>() - 8];
+    ["size of `struct Bucket`"][core::mem::size_of::<Bucket>() - 8];
 };
 
 impl Histogram {
@@ -212,9 +214,9 @@ impl Histogram {
         let mut overfull = Vec::new();
         for (idx, &WorkingBucket { dist, .. }) in buckets.iter().enumerate() {
             match dist.cmp(&bucket_size) {
-                std::cmp::Ordering::Less => underfull.push(idx),
-                std::cmp::Ordering::Equal => {}
-                std::cmp::Ordering::Greater => overfull.push(idx),
+                core::cmp::Ordering::Less => underfull.push(idx),
+                core::cmp::Ordering::Equal => {}
+                core::cmp::Ordering::Greater => overfull.push(idx),
             }
         }
         while let (Some(o), Some(u)) = (overfull.pop(), underfull.pop()) {
@@ -223,9 +225,9 @@ impl Histogram {
             buckets[u].alias_symbol = o as u16;
             buckets[u].alias_offset = buckets[o].alias_cutoff;
             match buckets[o].alias_cutoff.cmp(&bucket_size) {
-                std::cmp::Ordering::Less => underfull.push(o),
-                std::cmp::Ordering::Equal => {}
-                std::cmp::Ordering::Greater => overfull.push(o),
+                core::cmp::Ordering::Less => underfull.push(o),
+                core::cmp::Ordering::Equal => {}
+                core::cmp::Ordering::Greater => overfull.push(o),
             }
         }
 
@@ -274,7 +276,7 @@ impl Histogram {
 impl Histogram {
     #[inline(always)]
     pub fn read_symbol(&self, bitstream: &mut Bitstream, state: &mut u32) -> CodingResult<u32> {
-        assert_eq!(std::mem::size_of::<Bucket>(), 8);
+        assert_eq!(core::mem::size_of::<Bucket>(), 8);
         let is_le = usize::from_le(1) == 1;
 
         let idx = *state & 0xfff;
@@ -283,7 +285,7 @@ impl Histogram {
         // SAFETY: idx is 12 bits, buckets.len() << log_bucket_size == 1 << 12.
         let bucket = unsafe { *self.buckets.get_unchecked(i) };
         // SAFETY: all bit patterns are valid.
-        let bucket_int = unsafe { std::mem::transmute::<Bucket, u64>(bucket) };
+        let bucket_int = unsafe { core::mem::transmute::<Bucket, u64>(bucket) };
 
         // Ported from libjxl; this makes map_alias branchless.
         let (alias_symbol, alias_cutoff, dist) = if is_le {

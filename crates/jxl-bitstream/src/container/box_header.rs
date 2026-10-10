@@ -120,4 +120,3 @@ impl ContainerBoxType {
     /// HDR gain map box.
     pub const HDR_GAIN_MAP: Self = Self(*b"jhgm");
 }
-

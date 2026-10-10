@@ -2,6 +2,15 @@
 //!
 //! This crate is mainly for internal use.
 
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
+
+use alloc::{string::String, vec};
+
+#[doc(hidden)]
+pub use alloc::vec::Vec as __Vec;
+
 use jxl_bitstream::Bitstream;
 
 #[macro_export]
@@ -78,16 +87,16 @@ macro_rules! read_bits {
             (0..count)
                 .into_iter()
                 .map(|_| $crate::read_bits!($bitstream, $($inner)* $(, $ctx)?))
-                .collect::<::std::result::Result<Vec<_>, _>>()
+                .collect::<::core::result::Result<$crate::__Vec<_>, _>>()
         }
     };
     ($bitstream:ident, Array[$($inner:tt)*]; $count:expr $(, $ctx:expr)?) => {
-        (|| -> ::std::result::Result<[_; $count], _> {
+        (|| -> ::core::result::Result<[_; $count], _> {
             let mut ret = [Default::default(); $count];
             for point in &mut ret {
                 *point = match $crate::read_bits!($bitstream, $($inner)* $(, $ctx)?) {
-                    ::std::result::Result::Ok(v) => v,
-                    ::std::result::Result::Err(err) => return ::std::result::Result::Err(err),
+                    ::core::result::Result::Ok(v) => v,
+                    ::core::result::Result::Err(err) => return ::core::result::Result::Err(err),
                 };
             }
             Ok(ret)
@@ -111,7 +120,7 @@ macro_rules! make_def {
     (@ty; Bool) => { bool };
     (@ty; Enum($enum:ty)) => { $enum };
     (@ty; Bundle($bundle:ty)) => { $bundle };
-    (@ty; Vec[$($inner:tt)*]; $count:expr) => { Vec<$crate::make_def!(@ty; $($inner)*)> };
+    (@ty; Vec[$($inner:tt)*]; $count:expr) => { $crate::__Vec<$crate::make_def!(@ty; $($inner)*)> };
     (@ty; Array[$($inner:tt)*]; $count:expr) => { [$crate::make_def!(@ty; $($inner)*); $count] };
     ($(#[$attrs:meta])* $v:vis struct $bundle_name:ident {
         $($(#[$fieldattrs:meta])* $vfield:vis $field:ident: ty($($expr:tt)*) $(ctx($ctx_for_field:expr))? $(cond($cond:expr))? $(default($def_expr:expr))? ,)*
@@ -168,7 +177,7 @@ macro_rules! make_parse {
             type Error = $crate::make_parse!(@select_error_ty; $($err)?);
 
             #[allow(unused)]
-            fn parse(bitstream: &mut ::jxl_bitstream::Bitstream, ctx: Ctx) -> ::std::result::Result<Self, Self::Error> where Self: Sized {
+            fn parse(bitstream: &mut ::jxl_bitstream::Bitstream, ctx: Ctx) -> ::core::result::Result<Self, Self::Error> where Self: Sized {
                 use $crate::{Bundle, BundleDefault};
                 $(
                     let $field = $crate::make_parse!(
@@ -205,7 +214,7 @@ macro_rules! make_parse {
             type Error = $crate::make_parse!(@select_error_ty; $($err)?);
 
             #[allow(unused)]
-            fn parse(bitstream: &mut ::jxl_bitstream::Bitstream, $ctx_id: $ctx) -> ::std::result::Result<Self, Self::Error> where Self: Sized {
+            fn parse(bitstream: &mut ::jxl_bitstream::Bitstream, $ctx_id: $ctx) -> ::core::result::Result<Self, Self::Error> where Self: Sized {
                 use $crate::{Bundle, BundleDefault};
                 $(
                     let $field = $crate::make_parse!(
@@ -309,7 +318,7 @@ impl<Ctx> Bundle<Ctx> for Name {
     }
 }
 
-impl std::ops::Deref for Name {
+impl core::ops::Deref for Name {
     type Target = String;
 
     fn deref(&self) -> &Self::Target {
@@ -317,7 +326,7 @@ impl std::ops::Deref for Name {
     }
 }
 
-impl std::ops::DerefMut for Name {
+impl core::ops::DerefMut for Name {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }

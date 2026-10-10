@@ -1,5 +1,5 @@
-use std::ops::Range;
-use std::sync::Arc;
+use alloc::{sync::Arc, vec::Vec};
+use core::ops::Range;
 
 use crate::{BitstreamResult, Error};
 
@@ -19,8 +19,8 @@ pub struct Spans {
     len: usize,
 }
 
-impl std::fmt::Debug for Spans {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Spans {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Spans")
             .field("len", &self.len)
             .field("ranges", &self.spans.len())
@@ -47,7 +47,9 @@ impl Spans {
             return Err(Error::ValidationFailed("physical span out of bounds"));
         }
         let added = range.end - range.start;
-        let len = self.len.checked_add(added)
+        let len = self
+            .len
+            .checked_add(added)
             .filter(|len| len.checked_mul(8).is_some())
             .ok_or(Error::ValidationFailed("logical stream length overflow"))?;
         if added == 0 {
@@ -61,7 +63,7 @@ impl Spans {
             self.len = len;
             return Ok(());
         }
-        self.spans.try_reserve(1).map_err(|e| Error::Io(std::io::Error::other(e)))?;
+        self.spans.try_reserve(1).map_err(Error::Allocation)?;
         self.spans.push(Span {
             buffer,
             range,
@@ -73,7 +75,8 @@ impl Spans {
 
     /// Appends another stream's ranges without copying its bytes.
     pub fn append_spans(&mut self, other: &Self) -> BitstreamResult<()> {
-        self.len.checked_add(other.len)
+        self.len
+            .checked_add(other.len)
             .filter(|len| len.checked_mul(8).is_some())
             .ok_or(Error::ValidationFailed("logical stream length overflow"))?;
         for span in &other.spans {
@@ -88,7 +91,7 @@ impl Spans {
             return Err(Error::ValidationFailed("reversed logical range"));
         }
         if range.end > self.len {
-            return Err(Error::Io(std::io::ErrorKind::UnexpectedEof.into()));
+            return Err(Error::UnexpectedEof);
         }
         let mut out = Self::new();
         if range.is_empty() {
@@ -100,7 +103,10 @@ impl Spans {
             let span = &self.spans[index];
             let physical_start = span.range.start + (position - span.logical_start);
             let count = (span.range.end - physical_start).min(range.end - position);
-            out.append(Arc::clone(&span.buffer), physical_start..physical_start + count)?;
+            out.append(
+                Arc::clone(&span.buffer),
+                physical_start..physical_start + count,
+            )?;
             position += count;
             index += 1;
         }
@@ -112,18 +118,25 @@ impl Spans {
     }
 
     pub fn chunks(&self) -> impl Iterator<Item = &[u8]> {
-        self.spans.iter().map(|span| &span.buffer[span.range.clone()])
+        self.spans
+            .iter()
+            .map(|span| &span.buffer[span.range.clone()])
     }
 
     pub(crate) fn span_bytes(&self, index: usize) -> Option<&[u8]> {
-        self.spans.get(index).map(|span| &span.buffer[span.range.clone()])
+        self.spans
+            .get(index)
+            .map(|span| &span.buffer[span.range.clone()])
     }
 
     pub(crate) fn locate(&self, position: usize) -> (usize, &[u8]) {
         if position >= self.len {
             return (self.spans.len(), &[]);
         }
-        let index = self.spans.partition_point(|span| span.logical_start <= position) - 1;
+        let index = self
+            .spans
+            .partition_point(|span| span.logical_start <= position)
+            - 1;
         let span = &self.spans[index];
         let start = span.range.start + (position - span.logical_start);
         (index, &span.buffer[start..span.range.end])
@@ -153,10 +166,14 @@ pub struct Section {
 
 impl Section {
     pub fn new(logical_start: usize, spans: Spans) -> BitstreamResult<Self> {
-        logical_start.checked_add(spans.len())
+        logical_start
+            .checked_add(spans.len())
             .filter(|end| end.checked_mul(8).is_some())
             .ok_or(Error::ValidationFailed("section extent overflow"))?;
-        Ok(Self { logical_start, spans })
+        Ok(Self {
+            logical_start,
+            spans,
+        })
     }
 
     pub fn range(&self) -> Range<usize> {
@@ -181,8 +198,14 @@ impl Section {
             return Err(Error::ValidationFailed("noncontiguous section append"));
         }
         let suffix = source.slice(range.clone())?;
-        let start = if self.is_empty() { range.start } else { self.logical_start };
-        start.checked_add(self.len()).and_then(|end| end.checked_add(suffix.len()))
+        let start = if self.is_empty() {
+            range.start
+        } else {
+            self.logical_start
+        };
+        start
+            .checked_add(self.len())
+            .and_then(|end| end.checked_add(suffix.len()))
             .filter(|end| end.checked_mul(8).is_some())
             .ok_or(Error::ValidationFailed("section extent overflow"))?;
         self.spans.append_spans(&suffix)?;
@@ -190,4 +213,3 @@ impl Section {
         Ok(())
     }
 }
-

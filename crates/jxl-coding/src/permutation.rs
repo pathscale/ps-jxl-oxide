@@ -1,3 +1,5 @@
+use alloc::{vec, vec::Vec};
+
 use jxl_bitstream::Bitstream;
 
 /// Read a permutation from the entropy encoded stream.

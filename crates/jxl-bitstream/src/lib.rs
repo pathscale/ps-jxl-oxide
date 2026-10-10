@@ -10,6 +10,10 @@
 //! [`ContainerParser`] tries to parse the bytes fed into it, and emits various parser events
 //! including codestream data and auxiliary box data.
 
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
+
 mod bitstream;
 pub mod consts;
 pub mod container;
@@ -38,4 +42,3 @@ pub fn unpack_signed_u64(x: u64) -> i64 {
     let flip = 0u64.wrapping_sub(bit);
     (base ^ flip) as i64
 }
-

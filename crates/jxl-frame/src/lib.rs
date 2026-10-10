@@ -507,9 +507,7 @@ impl Frame {
                         0,
                         parser,
                     )
-                    .ok_or(
-                        jxl_bitstream::Error::Io(std::io::ErrorKind::UnexpectedEof.into()).into(),
-                    )
+                    .ok_or(jxl_bitstream::Error::UnexpectedEof.into())
                     .and_then(|x| x);
                 if let Err(e) = lf_group {
                     return Some(Err(e));

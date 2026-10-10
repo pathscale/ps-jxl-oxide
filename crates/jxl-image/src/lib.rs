@@ -5,6 +5,12 @@
 //!
 //! Image header is at the beginning of the bitstream. One can parse [`ImageHeader`] from the
 //! bitstream to retrieve information about the image.
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
+
+use alloc::vec::Vec;
+
 use jxl_bitstream::{Bitstream, BitstreamResult, U};
 use jxl_oxide_common::{Bundle, Name, define_bundle};
 
@@ -406,7 +412,7 @@ enum ExtraChannelTypeRaw {
 impl TryFrom<u32> for ExtraChannelTypeRaw {
     type Error = ();
 
-    fn try_from(value: u32) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: u32) -> core::result::Result<Self, Self::Error> {
         Ok(match value {
             0 => Self::Alpha,
             1 => Self::Depth,
@@ -478,8 +484,8 @@ impl BitDepth {
                 // TODO: handle subnormal values.
                 let f32_mantissa_bits = f32::MANTISSA_DIGITS - 1;
                 let mantissa = match mantissa_bits.cmp(&f32_mantissa_bits) {
-                    std::cmp::Ordering::Less => mantissa << (f32_mantissa_bits - mantissa_bits),
-                    std::cmp::Ordering::Greater => mantissa >> (mantissa_bits - f32_mantissa_bits),
+                    core::cmp::Ordering::Less => mantissa << (f32_mantissa_bits - mantissa_bits),
+                    core::cmp::Ordering::Greater => mantissa >> (mantissa_bits - f32_mantissa_bits),
                     _ => mantissa,
                 };
                 let exp = (exp + 127) as u32;

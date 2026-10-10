@@ -1,5 +1,11 @@
 //! This crate provides [`AlignedGrid`], used in various places involving images.
 
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
+
+use alloc::{vec, vec::Vec};
+
 mod alloc_tracker;
 mod mutable_subgrid;
 mod shared_subgrid;
@@ -9,7 +15,7 @@ pub use mutable_subgrid::*;
 pub use shared_subgrid::*;
 pub use simd::SimdVector;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod test;
 
 /// The error type for failed grid allocation.
@@ -29,10 +35,10 @@ impl OutOfMemory {
     }
 }
 
-impl std::error::Error for OutOfMemory {}
+impl core::error::Error for OutOfMemory {}
 
-impl std::fmt::Display for OutOfMemory {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for OutOfMemory {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "failed to allocate {} byte(s)", self.bytes)
     }
 }
@@ -48,8 +54,8 @@ pub struct AlignedGrid<S> {
     handle: Option<AllocHandle>,
 }
 
-impl<S> std::fmt::Debug for AlignedGrid<S> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<S> core::fmt::Debug for AlignedGrid<S> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("AlignedGrid")
             .field("width", &self.width)
             .field("height", &self.height)
@@ -86,7 +92,7 @@ impl<S: Default + Clone> AlignedGrid<S> {
             .checked_mul(height)
             .expect("grid dimensions overflow usize");
         let buf_len = len
-            .checked_add((Self::ALIGN - 1) / std::mem::size_of::<S>())
+            .checked_add((Self::ALIGN - 1) / core::mem::size_of::<S>())
             .expect("aligned grid buffer length overflows usize");
         let handle = tracker
             .map(|tracker| tracker.alloc::<S>(buf_len))
@@ -94,7 +100,7 @@ impl<S: Default + Clone> AlignedGrid<S> {
         let mut buf = vec![S::default(); buf_len];
 
         let extra = buf.as_ptr() as usize & (Self::ALIGN - 1);
-        let offset = ((Self::ALIGN - extra) % Self::ALIGN) / std::mem::size_of::<S>();
+        let offset = ((Self::ALIGN - extra) % Self::ALIGN) / core::mem::size_of::<S>();
         let len_with_offset = len
             .checked_add(offset)
             .expect("aligned grid buffer length overflows usize");
@@ -119,7 +125,7 @@ impl<S: Default + Clone> AlignedGrid<S> {
             .checked_mul(height)
             .expect("grid dimensions overflow usize");
         let buf_len = len
-            .checked_add((Self::ALIGN - 1) / std::mem::size_of::<S>())
+            .checked_add((Self::ALIGN - 1) / core::mem::size_of::<S>())
             .expect("aligned grid buffer length overflows usize");
         let handle = tracker
             .map(|tracker| tracker.alloc::<S>(buf_len))
@@ -127,7 +133,7 @@ impl<S: Default + Clone> AlignedGrid<S> {
         let mut buf = Vec::with_capacity(buf_len);
 
         let extra = buf.as_ptr() as usize & (Self::ALIGN - 1);
-        let offset = ((Self::ALIGN - extra) % Self::ALIGN) / std::mem::size_of::<S>();
+        let offset = ((Self::ALIGN - extra) % Self::ALIGN) / core::mem::size_of::<S>();
         buf.resize_with(offset, S::default);
 
         Ok(Self {

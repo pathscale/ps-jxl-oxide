@@ -95,11 +95,7 @@ impl Error {
             ))) => b,
             _ => return false,
         };
-        if let jxl_bitstream::Error::Io(e) = bitstream_err {
-            e.kind() == std::io::ErrorKind::UnexpectedEof
-        } else {
-            false
-        }
+        bitstream_err.unexpected_eof()
     }
 }
 

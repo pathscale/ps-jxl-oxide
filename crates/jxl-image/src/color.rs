@@ -358,7 +358,7 @@ pub enum ColourSpace {
 impl TryFrom<u32> for ColourSpace {
     type Error = ();
 
-    fn try_from(value: u32) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: u32) -> core::result::Result<Self, Self::Error> {
         Ok(match value {
             0 => Self::Rgb,
             1 => Self::Grey,
@@ -381,7 +381,7 @@ enum WhitePointDiscriminator {
 impl TryFrom<u32> for WhitePointDiscriminator {
     type Error = ();
 
-    fn try_from(value: u32) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: u32) -> core::result::Result<Self, Self::Error> {
         Ok(match value {
             1 => Self::D65,
             2 => Self::Custom,
@@ -437,7 +437,7 @@ enum PrimariesDiscriminator {
 impl TryFrom<u32> for PrimariesDiscriminator {
     type Error = ();
 
-    fn try_from(value: u32) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: u32) -> core::result::Result<Self, Self::Error> {
         Ok(match value {
             1 => Self::Srgb,
             2 => Self::Custom,
@@ -516,7 +516,7 @@ pub enum RenderingIntent {
 impl TryFrom<u32> for RenderingIntent {
     type Error = ();
 
-    fn try_from(value: u32) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: u32) -> core::result::Result<Self, Self::Error> {
         Ok(match value {
             0 => Self::Perceptual,
             1 => Self::Relative,
@@ -560,7 +560,7 @@ pub enum TransferFunction {
 impl TryFrom<u32> for TransferFunction {
     type Error = ();
 
-    fn try_from(value: u32) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: u32) -> core::result::Result<Self, Self::Error> {
         Ok(match value {
             1 => Self::Bt709,
             2 => Self::Unknown,

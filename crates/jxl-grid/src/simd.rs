@@ -104,10 +104,10 @@ pub trait SimdVector: private::Sealed + Copy {
 }
 
 #[cfg(target_arch = "x86_64")]
-impl private::Sealed for std::arch::x86_64::__m128 {}
+impl private::Sealed for core::arch::x86_64::__m128 {}
 
 #[cfg(target_arch = "x86_64")]
-impl SimdVector for std::arch::x86_64::__m128 {
+impl SimdVector for core::arch::x86_64::__m128 {
     const SIZE: usize = 4;
 
     #[inline]
@@ -118,84 +118,85 @@ impl SimdVector for std::arch::x86_64::__m128 {
 
     #[inline]
     unsafe fn zero() -> Self {
-        std::arch::x86_64::_mm_setzero_ps()
+        core::arch::x86_64::_mm_setzero_ps()
     }
 
     #[inline]
     unsafe fn set<const N: usize>(val: [f32; N]) -> Self {
         assert_eq!(N, Self::SIZE);
-        std::arch::x86_64::_mm_set_ps(val[3], val[2], val[1], val[0])
+        core::arch::x86_64::_mm_set_ps(val[3], val[2], val[1], val[0])
     }
 
     #[inline]
     unsafe fn splat_f32(val: f32) -> Self {
-        std::arch::x86_64::_mm_set1_ps(val)
+        core::arch::x86_64::_mm_set1_ps(val)
     }
 
     #[inline]
     unsafe fn load(ptr: *const f32) -> Self {
-        std::arch::x86_64::_mm_loadu_ps(ptr)
+        core::arch::x86_64::_mm_loadu_ps(ptr)
     }
 
     #[inline]
     unsafe fn load_aligned(ptr: *const f32) -> Self {
-        std::arch::x86_64::_mm_load_ps(ptr)
+        core::arch::x86_64::_mm_load_ps(ptr)
     }
 
     #[inline]
     unsafe fn extract_f32<const N: i32>(self) -> f32 {
         assert!((N as usize) < Self::SIZE);
-        let bits = std::arch::x86_64::_mm_extract_ps::<N>(self);
+        let bits = core::arch::x86_64::_mm_extract_ps::<N>(self);
         f32::from_bits(bits as u32)
     }
 
     #[inline]
     unsafe fn store(self, ptr: *mut f32) {
-        std::arch::x86_64::_mm_storeu_ps(ptr, self);
+        core::arch::x86_64::_mm_storeu_ps(ptr, self);
     }
 
     #[inline]
     unsafe fn store_aligned(self, ptr: *mut f32) {
-        std::arch::x86_64::_mm_store_ps(ptr, self);
+        core::arch::x86_64::_mm_store_ps(ptr, self);
     }
 
     #[inline]
     unsafe fn add(self, lhs: Self) -> Self {
-        std::arch::x86_64::_mm_add_ps(self, lhs)
+        core::arch::x86_64::_mm_add_ps(self, lhs)
     }
 
     #[inline]
     unsafe fn sub(self, lhs: Self) -> Self {
-        std::arch::x86_64::_mm_sub_ps(self, lhs)
+        core::arch::x86_64::_mm_sub_ps(self, lhs)
     }
 
     #[inline]
     unsafe fn mul(self, lhs: Self) -> Self {
-        std::arch::x86_64::_mm_mul_ps(self, lhs)
+        core::arch::x86_64::_mm_mul_ps(self, lhs)
     }
 
     #[inline]
     unsafe fn div(self, lhs: Self) -> Self {
-        std::arch::x86_64::_mm_div_ps(self, lhs)
+        core::arch::x86_64::_mm_div_ps(self, lhs)
     }
 
     #[inline]
     unsafe fn abs(self) -> Self {
-        let x = std::arch::x86_64::_mm_undefined_si128();
-        let mask = std::arch::x86_64::_mm_srli_epi32::<1>(std::arch::x86_64::_mm_cmpeq_epi32(x, x));
-        std::arch::x86_64::_mm_and_ps(std::arch::x86_64::_mm_castsi128_ps(mask), self)
+        let x = core::arch::x86_64::_mm_undefined_si128();
+        let mask =
+            core::arch::x86_64::_mm_srli_epi32::<1>(core::arch::x86_64::_mm_cmpeq_epi32(x, x));
+        core::arch::x86_64::_mm_and_ps(core::arch::x86_64::_mm_castsi128_ps(mask), self)
     }
 
     #[inline]
     #[cfg(target_feature = "fma")]
     unsafe fn muladd(self, mul: Self, add: Self) -> Self {
-        std::arch::x86_64::_mm_fmadd_ps(self, mul, add)
+        core::arch::x86_64::_mm_fmadd_ps(self, mul, add)
     }
 
     #[inline]
     #[cfg(target_feature = "fma")]
     unsafe fn mulsub(self, mul: Self, sub: Self) -> Self {
-        std::arch::x86_64::_mm_fmsub_ps(self, mul, sub)
+        core::arch::x86_64::_mm_fmsub_ps(self, mul, sub)
     }
 
     #[inline]
@@ -213,55 +214,62 @@ impl SimdVector for std::arch::x86_64::__m128 {
 
 #[cfg(target_arch = "x86_64")]
 const _: () = {
-    use std::{arch::x86_64::__m128, mem::size_of};
+    use core::{arch::x86_64::__m128, mem::size_of};
 
     assert!(size_of::<__m128>() == <__m128 as SimdVector>::SIZE * size_of::<f32>());
 };
 
 #[cfg(target_arch = "x86_64")]
-impl private::Sealed for std::arch::x86_64::__m256 {}
+impl private::Sealed for core::arch::x86_64::__m256 {}
 
 #[cfg(target_arch = "x86_64")]
-impl SimdVector for std::arch::x86_64::__m256 {
+impl SimdVector for core::arch::x86_64::__m256 {
     const SIZE: usize = 8;
 
     #[inline]
     fn available() -> bool {
-        is_x86_feature_detected!("avx2")
+        #[cfg(feature = "std")]
+        {
+            std::arch::is_x86_feature_detected!("avx2")
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            cfg!(target_feature = "avx2")
+        }
     }
 
     #[inline]
     unsafe fn zero() -> Self {
-        std::arch::x86_64::_mm256_setzero_ps()
+        core::arch::x86_64::_mm256_setzero_ps()
     }
 
     #[inline]
     unsafe fn set<const N: usize>(val: [f32; N]) -> Self {
         assert_eq!(N, Self::SIZE);
-        std::arch::x86_64::_mm256_set_ps(
+        core::arch::x86_64::_mm256_set_ps(
             val[7], val[6], val[5], val[4], val[3], val[2], val[1], val[0],
         )
     }
 
     #[inline]
     unsafe fn splat_f32(val: f32) -> Self {
-        std::arch::x86_64::_mm256_set1_ps(val)
+        core::arch::x86_64::_mm256_set1_ps(val)
     }
 
     #[inline]
     unsafe fn load(ptr: *const f32) -> Self {
-        std::arch::x86_64::_mm256_loadu_ps(ptr)
+        core::arch::x86_64::_mm256_loadu_ps(ptr)
     }
 
     #[inline]
     unsafe fn load_aligned(ptr: *const f32) -> Self {
-        std::arch::x86_64::_mm256_load_ps(ptr)
+        core::arch::x86_64::_mm256_load_ps(ptr)
     }
 
     #[inline]
     unsafe fn extract_f32<const N: i32>(self) -> f32 {
-        unsafe fn inner<const HI: i32, const LO: i32>(val: std::arch::x86_64::__m256) -> f32 {
-            std::arch::x86_64::_mm256_extractf128_ps::<HI>(val).extract_f32::<LO>()
+        unsafe fn inner<const HI: i32, const LO: i32>(val: core::arch::x86_64::__m256) -> f32 {
+            core::arch::x86_64::_mm256_extractf128_ps::<HI>(val).extract_f32::<LO>()
         }
 
         assert!((N as usize) < Self::SIZE);
@@ -272,59 +280,60 @@ impl SimdVector for std::arch::x86_64::__m256 {
             6 => inner::<1, 2>(self),
             7 => inner::<1, 3>(self),
             // SAFETY: 0 <= N < 8 by assertion.
-            _ => std::hint::unreachable_unchecked(),
+            _ => core::hint::unreachable_unchecked(),
         }
     }
 
     #[inline]
     unsafe fn store(self, ptr: *mut f32) {
-        std::arch::x86_64::_mm256_storeu_ps(ptr, self);
+        core::arch::x86_64::_mm256_storeu_ps(ptr, self);
     }
 
     #[inline]
     unsafe fn store_aligned(self, ptr: *mut f32) {
-        std::arch::x86_64::_mm256_store_ps(ptr, self);
+        core::arch::x86_64::_mm256_store_ps(ptr, self);
     }
 
     #[inline]
     unsafe fn add(self, lhs: Self) -> Self {
-        std::arch::x86_64::_mm256_add_ps(self, lhs)
+        core::arch::x86_64::_mm256_add_ps(self, lhs)
     }
 
     #[inline]
     unsafe fn sub(self, lhs: Self) -> Self {
-        std::arch::x86_64::_mm256_sub_ps(self, lhs)
+        core::arch::x86_64::_mm256_sub_ps(self, lhs)
     }
 
     #[inline]
     unsafe fn mul(self, lhs: Self) -> Self {
-        std::arch::x86_64::_mm256_mul_ps(self, lhs)
+        core::arch::x86_64::_mm256_mul_ps(self, lhs)
     }
 
     #[inline]
     unsafe fn div(self, lhs: Self) -> Self {
-        std::arch::x86_64::_mm256_div_ps(self, lhs)
+        core::arch::x86_64::_mm256_div_ps(self, lhs)
     }
 
     #[inline]
     #[target_feature(enable = "avx2")]
     unsafe fn abs(self) -> Self {
-        let x = std::arch::x86_64::_mm256_undefined_si256();
-        let mask =
-            std::arch::x86_64::_mm256_srli_epi32::<1>(std::arch::x86_64::_mm256_cmpeq_epi32(x, x));
-        std::arch::x86_64::_mm256_and_ps(std::arch::x86_64::_mm256_castsi256_ps(mask), self)
+        let x = core::arch::x86_64::_mm256_undefined_si256();
+        let mask = core::arch::x86_64::_mm256_srli_epi32::<1>(
+            core::arch::x86_64::_mm256_cmpeq_epi32(x, x),
+        );
+        core::arch::x86_64::_mm256_and_ps(core::arch::x86_64::_mm256_castsi256_ps(mask), self)
     }
 
     #[inline]
     #[cfg(target_feature = "fma")]
     unsafe fn muladd(self, mul: Self, add: Self) -> Self {
-        std::arch::x86_64::_mm256_fmadd_ps(self, mul, add)
+        core::arch::x86_64::_mm256_fmadd_ps(self, mul, add)
     }
 
     #[inline]
     #[cfg(target_feature = "fma")]
     unsafe fn mulsub(self, mul: Self, sub: Self) -> Self {
-        std::arch::x86_64::_mm256_fmsub_ps(self, mul, sub)
+        core::arch::x86_64::_mm256_fmsub_ps(self, mul, sub)
     }
 
     #[inline]
@@ -342,112 +351,119 @@ impl SimdVector for std::arch::x86_64::__m256 {
 
 #[cfg(target_arch = "x86_64")]
 const _: () = {
-    use std::{arch::x86_64::__m256, mem::size_of};
+    use core::{arch::x86_64::__m256, mem::size_of};
 
     assert!(size_of::<__m256>() == <__m256 as SimdVector>::SIZE * size_of::<f32>());
 };
 
 #[cfg(target_arch = "aarch64")]
-impl private::Sealed for std::arch::aarch64::float32x4_t {}
+impl private::Sealed for core::arch::aarch64::float32x4_t {}
 
 #[cfg(target_arch = "aarch64")]
-impl SimdVector for std::arch::aarch64::float32x4_t {
+impl SimdVector for core::arch::aarch64::float32x4_t {
     const SIZE: usize = 4;
 
     #[inline]
     fn available() -> bool {
-        std::arch::is_aarch64_feature_detected!("neon")
+        #[cfg(feature = "std")]
+        {
+            std::arch::is_aarch64_feature_detected!("neon")
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            cfg!(target_feature = "neon")
+        }
     }
 
     #[inline]
     unsafe fn zero() -> Self {
-        std::arch::aarch64::vdupq_n_f32(0f32)
+        core::arch::aarch64::vdupq_n_f32(0f32)
     }
 
     #[inline]
     unsafe fn set<const N: usize>(val: [f32; N]) -> Self {
         assert_eq!(N, Self::SIZE);
-        std::arch::aarch64::vld1q_f32(val.as_ptr())
+        core::arch::aarch64::vld1q_f32(val.as_ptr())
     }
 
     #[inline]
     unsafe fn splat_f32(val: f32) -> Self {
-        std::arch::aarch64::vdupq_n_f32(val)
+        core::arch::aarch64::vdupq_n_f32(val)
     }
 
     #[inline]
     unsafe fn load(ptr: *const f32) -> Self {
-        std::arch::aarch64::vld1q_f32(ptr)
+        core::arch::aarch64::vld1q_f32(ptr)
     }
 
     #[inline]
     unsafe fn load_aligned(ptr: *const f32) -> Self {
-        std::arch::aarch64::vld1q_f32(ptr)
+        core::arch::aarch64::vld1q_f32(ptr)
     }
 
     #[inline]
     unsafe fn extract_f32<const N: i32>(self) -> f32 {
-        std::arch::aarch64::vgetq_lane_f32::<N>(self)
+        core::arch::aarch64::vgetq_lane_f32::<N>(self)
     }
 
     #[inline]
     unsafe fn store(self, ptr: *mut f32) {
-        std::arch::aarch64::vst1q_f32(ptr, self)
+        core::arch::aarch64::vst1q_f32(ptr, self)
     }
 
     #[inline]
     unsafe fn store_aligned(self, ptr: *mut f32) {
-        std::arch::aarch64::vst1q_f32(ptr, self)
+        core::arch::aarch64::vst1q_f32(ptr, self)
     }
 
     #[inline]
     unsafe fn add(self, lhs: Self) -> Self {
-        std::arch::aarch64::vaddq_f32(self, lhs)
+        core::arch::aarch64::vaddq_f32(self, lhs)
     }
 
     #[inline]
     unsafe fn sub(self, lhs: Self) -> Self {
-        std::arch::aarch64::vsubq_f32(self, lhs)
+        core::arch::aarch64::vsubq_f32(self, lhs)
     }
 
     #[inline]
     unsafe fn mul(self, lhs: Self) -> Self {
-        std::arch::aarch64::vmulq_f32(self, lhs)
+        core::arch::aarch64::vmulq_f32(self, lhs)
     }
 
     #[inline]
     unsafe fn div(self, lhs: Self) -> Self {
-        std::arch::aarch64::vdivq_f32(self, lhs)
+        core::arch::aarch64::vdivq_f32(self, lhs)
     }
 
     #[inline]
     unsafe fn abs(self) -> Self {
-        std::arch::aarch64::vabsq_f32(self)
+        core::arch::aarch64::vabsq_f32(self)
     }
 
     #[inline]
     unsafe fn muladd(self, mul: Self, add: Self) -> Self {
-        std::arch::aarch64::vfmaq_f32(add, self, mul)
+        core::arch::aarch64::vfmaq_f32(add, self, mul)
     }
 
     #[inline]
     unsafe fn mulsub(self, mul: Self, sub: Self) -> Self {
-        std::arch::aarch64::vfmsq_f32(sub, self, mul)
+        core::arch::aarch64::vfmsq_f32(sub, self, mul)
     }
 }
 
 #[cfg(target_arch = "aarch64")]
 const _: () = {
-    use std::{arch::aarch64::float32x4_t, mem::size_of};
+    use core::{arch::aarch64::float32x4_t, mem::size_of};
 
     assert!(size_of::<float32x4_t>() == <float32x4_t as SimdVector>::SIZE * size_of::<f32>());
 };
 
 #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
-impl private::Sealed for std::arch::wasm32::v128 {}
+impl private::Sealed for core::arch::wasm32::v128 {}
 
 #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
-impl SimdVector for std::arch::wasm32::v128 {
+impl SimdVector for core::arch::wasm32::v128 {
     const SIZE: usize = 4;
 
     #[inline]
@@ -457,74 +473,74 @@ impl SimdVector for std::arch::wasm32::v128 {
 
     #[inline]
     unsafe fn zero() -> Self {
-        std::arch::wasm32::f32x4_splat(0f32)
+        core::arch::wasm32::f32x4_splat(0f32)
     }
 
     #[inline]
     unsafe fn set<const N: usize>(val: [f32; N]) -> Self {
         assert_eq!(N, Self::SIZE);
-        std::arch::wasm32::f32x4(val[0], val[1], val[2], val[3])
+        core::arch::wasm32::f32x4(val[0], val[1], val[2], val[3])
     }
 
     #[inline]
     unsafe fn splat_f32(val: f32) -> Self {
-        std::arch::wasm32::f32x4_splat(val)
+        core::arch::wasm32::f32x4_splat(val)
     }
 
     #[inline]
     unsafe fn load(ptr: *const f32) -> Self {
-        std::arch::wasm32::v128_load(ptr as *const _)
+        core::arch::wasm32::v128_load(ptr as *const _)
     }
 
     #[inline]
     unsafe fn load_aligned(ptr: *const f32) -> Self {
-        std::arch::wasm32::v128_load(ptr as *const _)
+        core::arch::wasm32::v128_load(ptr as *const _)
     }
 
     #[inline]
     unsafe fn extract_f32<const N: i32>(self) -> f32 {
         match N {
-            0 => std::arch::wasm32::f32x4_extract_lane::<0>(self),
-            1 => std::arch::wasm32::f32x4_extract_lane::<1>(self),
-            2 => std::arch::wasm32::f32x4_extract_lane::<2>(self),
-            3 => std::arch::wasm32::f32x4_extract_lane::<3>(self),
+            0 => core::arch::wasm32::f32x4_extract_lane::<0>(self),
+            1 => core::arch::wasm32::f32x4_extract_lane::<1>(self),
+            2 => core::arch::wasm32::f32x4_extract_lane::<2>(self),
+            3 => core::arch::wasm32::f32x4_extract_lane::<3>(self),
             _ => panic!(),
         }
     }
 
     #[inline]
     unsafe fn store(self, ptr: *mut f32) {
-        std::arch::wasm32::v128_store(ptr as *mut _, self)
+        core::arch::wasm32::v128_store(ptr as *mut _, self)
     }
 
     #[inline]
     unsafe fn store_aligned(self, ptr: *mut f32) {
-        std::arch::wasm32::v128_store(ptr as *mut _, self)
+        core::arch::wasm32::v128_store(ptr as *mut _, self)
     }
 
     #[inline]
     unsafe fn add(self, lhs: Self) -> Self {
-        std::arch::wasm32::f32x4_add(self, lhs)
+        core::arch::wasm32::f32x4_add(self, lhs)
     }
 
     #[inline]
     unsafe fn sub(self, lhs: Self) -> Self {
-        std::arch::wasm32::f32x4_sub(self, lhs)
+        core::arch::wasm32::f32x4_sub(self, lhs)
     }
 
     #[inline]
     unsafe fn mul(self, lhs: Self) -> Self {
-        std::arch::wasm32::f32x4_mul(self, lhs)
+        core::arch::wasm32::f32x4_mul(self, lhs)
     }
 
     #[inline]
     unsafe fn div(self, lhs: Self) -> Self {
-        std::arch::wasm32::f32x4_div(self, lhs)
+        core::arch::wasm32::f32x4_div(self, lhs)
     }
 
     #[inline]
     unsafe fn abs(self) -> Self {
-        std::arch::wasm32::f32x4_abs(self)
+        core::arch::wasm32::f32x4_abs(self)
     }
 
     #[inline]
@@ -540,7 +556,7 @@ impl SimdVector for std::arch::wasm32::v128 {
 
 #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
 const _: () = {
-    use std::{arch::wasm32::v128, mem::size_of};
+    use core::{arch::wasm32::v128, mem::size_of};
 
     assert!(size_of::<v128>() == <v128 as SimdVector>::SIZE * size_of::<f32>());
 };

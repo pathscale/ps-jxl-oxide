@@ -35,8 +35,8 @@ pub enum Error {
     InvalidLz77Symbol,
 }
 
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl core::error::Error for Error {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             Self::Bitstream(err) => Some(err),
             _ => None,
@@ -44,8 +44,8 @@ impl std::error::Error for Error {
     }
 }
 
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Bitstream(err) => write!(f, "error from bitstream: {err}"),
             Self::Lz77NotAllowed => write!(f, "LZ77-enabled decoder when it is not allowed"),

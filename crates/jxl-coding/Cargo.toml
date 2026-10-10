@@ -12,8 +12,14 @@ version = "1.0.1"
 edition = "2024"
 
 [dependencies]
-tracing.workspace = true
+tracing = { version = "0.1.40", default-features = false }
 
 [dependencies.jxl-bitstream]
 version = "1.0.0"
 path = "../jxl-bitstream"
+default-features = false
+
+[features]
+default = ["std"]
+std = ["tracing/std", "jxl-bitstream/std"]
+

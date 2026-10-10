@@ -14,3 +14,9 @@ edition = "2024"
 [dependencies.jxl-bitstream]
 version = "1.0.0"
 path = "../jxl-bitstream"
+default-features = false
+
+[features]
+default = ["std"]
+std = ["jxl-bitstream/std"]
+

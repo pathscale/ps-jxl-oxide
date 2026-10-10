@@ -1,4 +1,6 @@
 //! Prefix code based on Brotli
+use alloc::{vec, vec::Vec};
+
 use jxl_bitstream::Bitstream;
 
 use crate::{CodingResult, Error};
@@ -22,7 +24,7 @@ struct Entry {
 }
 
 const _: () = {
-    ["size of `struct Entry`"][std::mem::size_of::<Entry>() - 4];
+    ["size of `struct Entry`"][core::mem::size_of::<Entry>() - 4];
 };
 
 impl Histogram {
@@ -245,9 +247,9 @@ impl Histogram {
                 bitacc += 32 >> len;
 
                 match bitacc.cmp(&32) {
-                    std::cmp::Ordering::Less => {}
-                    std::cmp::Ordering::Equal => break,
-                    std::cmp::Ordering::Greater => return Err(Error::InvalidPrefixHistogram),
+                    core::cmp::Ordering::Less => {}
+                    core::cmp::Ordering::Equal => break,
+                    core::cmp::Ordering::Greater => return Err(Error::InvalidPrefixHistogram),
                 }
             }
         }

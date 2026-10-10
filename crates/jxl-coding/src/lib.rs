@@ -4,7 +4,11 @@
 //! This also provides [`read_permutation`] and [`read_clusters`], which are used in some parts of
 //! the specification.
 
-use std::sync::Arc;
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
+
+use alloc::{collections::BTreeSet, sync::Arc, vec, vec::Vec};
 
 use jxl_bitstream::{Bitstream, U};
 
@@ -16,7 +20,7 @@ mod prefix;
 pub use error::Error;
 
 /// Shorthand for result type of entropy decoding.
-pub type CodingResult<T> = std::result::Result<T, Error>;
+pub type CodingResult<T> = core::result::Result<T, Error>;
 
 pub use permutation::read_permutation;
 
@@ -344,8 +348,8 @@ struct Lz77State {
     num_decoded: u32,
 }
 
-impl std::fmt::Debug for Lz77State {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Lz77State {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Lz77State")
             .field("lz_len_conf", &self.lz_len_conf)
             .field("num_to_copy", &self.num_to_copy)
@@ -695,7 +699,7 @@ pub fn read_clusters(bitstream: &mut Bitstream, num_dist: u32) -> CodingResult<(
         let nbits = bitstream.read_bits(2)? as usize;
         (0..num_dist)
             .map(|_| bitstream.read_bits(nbits).map(|b| b as u8))
-            .collect::<std::result::Result<Vec<_>, _>>()?
+            .collect::<core::result::Result<Vec<_>, _>>()?
     } else {
         let use_mtf = bitstream.read_bool()?;
         let mut decoder = if num_dist <= 2 {
@@ -727,10 +731,7 @@ pub fn read_clusters(bitstream: &mut Bitstream, num_dist: u32) -> CodingResult<(
     };
 
     let num_clusters = *cluster.iter().max().unwrap() as u32 + 1;
-    let set = cluster
-        .iter()
-        .copied()
-        .collect::<std::collections::HashSet<_>>();
+    let set = cluster.iter().copied().collect::<BTreeSet<_>>();
     let num_expected_clusters = num_clusters;
     let num_actual_clusters = set.len() as u32;
     if num_actual_clusters != num_expected_clusters {
