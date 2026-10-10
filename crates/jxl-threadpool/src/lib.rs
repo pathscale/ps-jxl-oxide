@@ -26,7 +26,7 @@ pub trait TaskExecutor: Send + Sync + 'static {
 
 /// A cheap handle passed through the async decoder.
 #[derive(Clone)]
-pub struct Tasks(Arc<dyn TaskExecutor>);
+pub struct Tasks(Arc<dyn TaskExecutor>, bool);
 
 impl core::fmt::Debug for Tasks {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -59,11 +59,19 @@ impl TaskExecutor for InlineExecutor {
 impl Tasks {
     /// Runs each job during spawn and returns a ready future.
     pub fn inline() -> Self {
-        Self::new(Arc::new(InlineExecutor))
+        Self(Arc::new(InlineExecutor), true)
     }
 
     pub fn new(executor: Arc<dyn TaskExecutor>) -> Self {
-        Self(executor)
+        Self(executor, false)
+    }
+
+    /// Whether jobs run immediately on the calling thread.
+    ///
+    /// Inline stages can give one job the final destination allocation.
+    #[inline]
+    pub fn is_inline(&self) -> bool {
+        self.1
     }
 
     /// Spawns every job before awaiting any, then collects outputs in index order.
