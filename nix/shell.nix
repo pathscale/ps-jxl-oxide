@@ -1,0 +1,59 @@
+let
+  inherit (builtins) fetchTarball fromJSON readFile;
+  getFlake =
+    name: with (fromJSON (readFile ./flake.lock)).nodes.${name}.locked; {
+      inherit rev;
+      outPath = fetchTarball {
+        url = "https://github.com/${owner}/${repo}/archive/${rev}.tar.gz";
+        sha256 = narHash;
+      };
+    };
+in
+
+{
+  system ? builtins.currentSystem,
+  pkgs ? import (getFlake "nixpkgs") {
+    localSystem = {
+      inherit system;
+    };
+  },
+  lib,
+  fenix ? (import (getFlake "fenix") { }).packages.${system},
+  toolchainSpec,
+  useMiri ? false,
+  ...
+}:
+
+let
+  pkgsFromNixpkgs = with pkgs; [
+    ffmpeg_8-headless
+    nodejs
+    pkg-config
+    wasm-pack
+    wasm-bindgen-cli
+
+    rustPlatform.bindgenHook
+  ];
+
+  rustToolchain = fenix.combine (
+    with fenix.toolchainOf toolchainSpec; (
+      [
+        cargo
+        clippy
+        rust-analyzer
+        rust-src
+        rustc
+        rustfmt
+      ]
+      ++ (lib.optional useMiri miri)
+    )
+    ++ [
+      (fenix.targets.wasm32-unknown-unknown.toolchainOf toolchainSpec).rust-std
+    ]
+  );
+in
+
+pkgs.mkShell {
+  name = "jxl-oxide";
+  nativeBuildInputs = pkgsFromNixpkgs ++ [ rustToolchain ];
+}

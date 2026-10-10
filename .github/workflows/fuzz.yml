@@ -1,0 +1,90 @@
+on:
+  push:
+    branches:
+      - main
+      - v*.x
+  schedule:
+    - cron: '11 15 * * *' # every day at 15:11 UTC
+  workflow_dispatch: {}
+name: Fuzz
+env:
+  FUZZ_CORPUS_URL: 'https://jxl-oxide-fixtures.tirr.dev/fuzz-corpus.tar.zst'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    name: Fuzz
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: 'true'
+      - uses: dtolnay/rust-toolchain@nightly
+        id: toolchain
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+          key: ${{ runner.os }}-dot-cargo-${{ steps.toolchain.outputs.cacheKey }}-cargo-fuzz-0.12.0-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-dot-cargo-${{ steps.toolchain.outputs.cacheKey }}-cargo-fuzz-0.12.0-
+            ${{ runner.os }}-dot-cargo-${{ steps.toolchain.outputs.cacheKey }}-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-dot-cargo-${{ steps.toolchain.outputs.cacheKey }}-
+            ${{ runner.os }}-dot-cargo-
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --version 0.12.0
+      - uses: actions/cache/restore@v5
+        id: restore-corpus
+        with:
+          path: fuzz/corpus/
+          key: fuzz-corpus-0-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            fuzz-corpus-0-${{ github.run_id }}-
+            fuzz-corpus-0-
+          enableCrossOsArchive: true
+      - name: Populate initial corpus
+        if: steps.restore-corpus.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p fuzz/corpus/
+          curl -sSfL "${FUZZ_CORPUS_URL}" | zstd -d | tar -xvC fuzz/corpus/
+      - name: Run fuzzer
+        id: fuzz
+        run: |
+          cargo fuzz run libfuzzer-decode -- \
+            -max_len=4096 \
+            -reload=0 \
+            -timeout=5 \
+            -max_total_time=1200
+      - name: Minimize corpus
+        id: minimize
+        run: |
+          cargo fuzz cmin libfuzzer-decode -- \
+            -max_len=8192 \
+            -timeout=5 \
+            -max_total_time=600
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() && (steps.fuzz.outcome == 'failure' || steps.minimize.outcome == 'failure') }}
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
+      - name: Upload corpus
+        uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() && steps.fuzz.outcome != 'cancelled' }}
+        with:
+          name: fuzz-corpus
+          path: fuzz/corpus/
+      - uses: actions/cache/save@v5
+        if: ${{ !cancelled() && steps.fuzz.outcome != 'cancelled' }}
+        with:
+          path: fuzz/corpus/
+          key: fuzz-corpus-0-${{ github.run_id }}-${{ github.run_attempt }}
+          enableCrossOsArchive: true
