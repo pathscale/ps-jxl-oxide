@@ -97,6 +97,8 @@ impl<'buf> EpfInputRows<'buf> {
         self.rows[y]
     }
 
+    // Only the x86_64 SSE4.1 EPF kernel reads single samples.
+    #[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
     #[inline]
     pub(super) fn get(&self, x: usize, y: usize) -> f32 {
         self.rows[y][x]
