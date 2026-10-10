@@ -77,10 +77,18 @@ impl Tasks {
     /// Spawns every job before awaiting any, then collects outputs in index order.
     ///
     /// All handles are retained by this future. Cancellation is an error, never a panic.
+    /// The inline executor calls each job directly and always returns `Ok`.
     pub async fn run_all<T: Send + 'static>(
         &self,
         jobs: Vec<Box<dyn FnOnce() -> T + Send + 'static>>,
     ) -> Result<Vec<T>, Cancelled> {
+        if self.is_inline() {
+            let mut outputs = Vec::with_capacity(jobs.len());
+            for job in jobs {
+                outputs.push(job());
+            }
+            return Ok(outputs);
+        }
         let futures: Vec<_> = jobs
             .into_iter()
             .map(|job| {
