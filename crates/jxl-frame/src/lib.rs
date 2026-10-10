@@ -20,8 +20,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use jxl_bitstream::Bitstream;
-use jxl_grid::{AllocHandle, AllocTracker};
+use jxl_bitstream::{Bitstream, Section, Spans};
+use jxl_grid::AllocTracker;
 use jxl_image::ImageHeader;
 use jxl_oxide_common::Bundle;
 
@@ -48,6 +48,7 @@ pub struct Frame {
     image_header: Arc<ImageHeader>,
     header: FrameHeader,
     toc: Toc,
+    header_data: Option<Section>,
     data: Vec<GroupData>,
     all_group_offsets: AllGroupOffsets,
     reading_data_index: usize,
@@ -65,37 +66,15 @@ struct AllGroupOffsets {
 #[derive(Debug)]
 struct GroupData {
     toc_group: TocGroup,
-    bytes: Vec<u8>,
-    handle: Option<AllocHandle>,
+    bytes: Section,
 }
 
 impl From<TocGroup> for GroupData {
     fn from(value: TocGroup) -> Self {
         Self {
             toc_group: value,
-            bytes: Vec::new(),
-            handle: None,
+            bytes: Section::default(),
         }
-    }
-}
-
-impl GroupData {
-    fn ensure_allocated(&mut self, tracker: Option<&AllocTracker>) -> Result<()> {
-        if let Some(tracker) = tracker {
-            if self.handle.is_some() {
-                return Ok(());
-            }
-
-            let size = self.toc_group.size as usize;
-            let handle = tracker.alloc::<u8>(size)?;
-            self.bytes.try_reserve(size)?;
-            self.handle = Some(handle);
-        } else {
-            let additional = (self.toc_group.size as usize).saturating_sub(self.bytes.capacity());
-            self.bytes.try_reserve(additional)?;
-        }
-
-        Ok(())
     }
 }
 
@@ -212,7 +191,10 @@ impl Bundle<FrameContext<'_>> for Frame {
         }
 
         let mut toc = Toc::parse(bitstream, &header)?;
-        toc.adjust_offsets(base_offset);
+        toc.adjust_offsets(base_offset)?;
+        let header_data = bitstream
+            .source_section(base_offset..bitstream.num_read_bits() / 8)
+            .transpose()?;
         let data = toc.iter_bitstream_order().map(GroupData::from).collect();
 
         let passes = &header.passes;
@@ -231,6 +213,7 @@ impl Bundle<FrameContext<'_>> for Frame {
             image_header,
             header,
             toc,
+            header_data,
             data,
             all_group_offsets: AllGroupOffsets::default(),
             reading_data_index: 0,
@@ -269,27 +252,38 @@ impl Frame {
         &self.pass_shifts
     }
 
-    pub fn data(&self, group: TocGroupKind) -> Option<&[u8]> {
+    /// Compressed frame header and TOC ranges, when parsed from spans.
+    pub fn header_data(&self) -> Option<&Section> {
+        self.header_data.as_ref()
+    }
+
+    pub fn data(&self, group: TocGroupKind) -> Option<&Section> {
         let idx = self.toc.group_index_bitstream_order(group);
-        self.data.get(idx).map(|b| &*b.bytes)
+        self.data.get(idx).map(|b| &b.bytes)
     }
 }
 
 impl Frame {
-    pub fn feed_bytes<'buf>(&mut self, mut buf: &'buf [u8]) -> Result<&'buf [u8]> {
+    /// Retains available ranges and returns the number of logical bytes consumed.
+    pub fn feed_spans(&mut self, source: &Spans, range: std::ops::Range<usize>) -> Result<usize> {
+        if range.start > range.end || range.end > source.len() {
+            return Err(jxl_bitstream::Error::ValidationFailed("frame input range out of bounds").into());
+        }
+        let mut position = range.start;
         while let Some(group_data) = self.data.get_mut(self.reading_data_index) {
-            group_data.ensure_allocated(self.tracker.as_ref())?;
-            let bytes_left = group_data.toc_group.size as usize - group_data.bytes.len();
-            if buf.len() < bytes_left {
-                group_data.bytes.extend_from_slice(buf);
-                return Ok(&[]);
+            let size = usize::try_from(group_data.toc_group.size)
+                .map_err(|_| jxl_bitstream::Error::ValidationFailed("group size overflow"))?;
+            let bytes_left = size.checked_sub(group_data.bytes.len())
+                .ok_or(jxl_bitstream::Error::ValidationFailed("group data exceeds TOC size"))?;
+            let count = bytes_left.min(range.end - position);
+            group_data.bytes.append_from(source, position..position + count)?;
+            position += count;
+            if count < bytes_left {
+                break;
             }
-            let (l, r) = buf.split_at(bytes_left);
-            group_data.bytes.extend_from_slice(l);
-            buf = r;
             self.reading_data_index += 1;
         }
-        Ok(buf)
+        Ok(position - range.start)
     }
 
     #[inline]
@@ -312,7 +306,7 @@ impl Frame {
 
             let group = self.data.first()?;
             let loaded = self.reading_data_index != 0;
-            let mut bitstream = Bitstream::new(&group.bytes);
+            let mut bitstream = Bitstream::from_section(&group.bytes);
             let lf_global = LfGlobal::parse(
                 &mut bitstream,
                 LfGlobalParams::new(
@@ -340,7 +334,7 @@ impl Frame {
             let group = self.data.get(idx)?;
             let allow_partial = group.bytes.len() < group.toc_group.size as usize;
 
-            let mut bitstream = Bitstream::new(&group.bytes);
+            let mut bitstream = Bitstream::from_section(&group.bytes);
             LfGlobal::parse(
                 &mut bitstream,
                 LfGlobalParams::new(
@@ -371,7 +365,7 @@ impl Frame {
 
             let group = self.data.first()?;
             let loaded = self.reading_data_index != 0;
-            let mut bitstream = Bitstream::new(&group.bytes);
+            let mut bitstream = Bitstream::from_section(&group.bytes);
             let offset = self.all_group_offsets.lf_group.load(Ordering::Relaxed);
             if offset == 0 {
                 let lf_global = self.try_parse_lf_global::<S>().unwrap();
@@ -380,7 +374,9 @@ impl Frame {
                 }
             }
             let offset = self.all_group_offsets.lf_group.load(Ordering::Relaxed);
-            bitstream.skip_bits(offset).unwrap();
+            if let Err(error) = bitstream.skip_bits(offset) {
+                return Some(Err(error.into()));
+            }
 
             let result = LfGroup::parse(
                 &mut bitstream,
@@ -416,7 +412,7 @@ impl Frame {
             let group = self.data.get(idx)?;
             let allow_partial = group.bytes.len() < group.toc_group.size as usize;
 
-            let mut bitstream = Bitstream::new(&group.bytes);
+            let mut bitstream = Bitstream::from_section(&group.bytes);
             let result = LfGroup::parse(
                 &mut bitstream,
                 LfGroupParams {
@@ -450,7 +446,7 @@ impl Frame {
 
             let group = self.data.first()?;
             let loaded = self.reading_data_index != 0;
-            let mut bitstream = Bitstream::new(&group.bytes);
+            let mut bitstream = Bitstream::from_section(&group.bytes);
             let offset = self.all_group_offsets.hf_global.load(Ordering::Relaxed);
             let lf_global = if cached_lf_global.is_none() && (offset == 0 || !is_modular) {
                 match self.try_parse_lf_global()? {
@@ -502,7 +498,9 @@ impl Frame {
                 return None;
             }
 
-            bitstream.skip_bits(offset).unwrap();
+            if let Err(error) = bitstream.skip_bits(offset) {
+                return Some(Err(error.into()));
+            }
             let lf_global = lf_global.unwrap();
             let result = HfGlobal::parse(
                 &mut bitstream,
@@ -539,7 +537,7 @@ impl Frame {
                 return None;
             }
 
-            let mut bitstream = Bitstream::new(&group.bytes);
+            let mut bitstream = Bitstream::from_section(&group.bytes);
             let lf_global = if cached_lf_global.is_none() {
                 match self.try_parse_lf_global()? {
                     Ok(lf_global) => Some(lf_global),
@@ -576,7 +574,7 @@ impl Frame {
 
             let group = self.data.first()?;
             let loaded = self.reading_data_index != 0;
-            let mut bitstream = Bitstream::new(&group.bytes);
+            let mut bitstream = Bitstream::from_section(&group.bytes);
             let mut offset = self.all_group_offsets.pass_group.load(Ordering::Relaxed);
             if offset == 0 {
                 let hf_global = self.try_parse_hf_global::<i32>(None)?;
@@ -585,7 +583,9 @@ impl Frame {
                 }
                 offset = self.all_group_offsets.pass_group.load(Ordering::Relaxed);
             }
-            bitstream.skip_bits(offset).unwrap();
+            if let Err(error) = bitstream.skip_bits(offset) {
+                return Some(Err(error.into()));
+            }
 
             Ok(PassGroupBitstream {
                 bitstream,
@@ -601,7 +601,7 @@ impl Frame {
             let group = self.data.get(idx)?;
             let partial = group.bytes.len() < group.toc_group.size as usize;
 
-            let bitstream = Bitstream::new(&group.bytes);
+            let bitstream = Bitstream::from_section(&group.bytes);
             Ok(PassGroupBitstream { bitstream, partial })
         })
     }

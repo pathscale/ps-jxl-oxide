@@ -14,10 +14,12 @@ mod bitstream;
 pub mod consts;
 pub mod container;
 mod error;
+mod spans;
 
 pub use bitstream::{Bitstream, U, U32Specifier};
 pub use container::{BitstreamKind, ContainerParser, ParseEvent};
 pub use error::{BitstreamResult, Error};
+pub use spans::{Section, Spans};
 
 /// Perform `UnpackSigned` for `u32`, as specified in the JPEG XL specification.
 #[inline]
@@ -36,3 +38,4 @@ pub fn unpack_signed_u64(x: u64) -> i64 {
     let flip = 0u64.wrapping_sub(bit);
     (base ^ flip) as i64
 }
+

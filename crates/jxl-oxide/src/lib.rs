@@ -15,51 +15,31 @@
 //! println!("{:?}", image.image_header()); // Prints the image header
 //! ```
 //!
-//! In async context, you'll probably want to feed byte buffers directly. In this case, create an
-//! image struct with *uninitialized state* using [`build_uninit`][JxlImageBuilder::build_uninit],
-//! and call [`feed_bytes`][UninitializedJxlImage::feed_bytes] and
-//! [`try_init`][UninitializedJxlImage::try_init]:
+//! For incremental input, create an uninitialized image and append immutable chunks.
+//! The decoder retains each chunk, including incomplete container headers.
 //!
 //! ```no_run
-//! # struct StubReader(&'static [u8]);
-//! # impl StubReader {
-//! #     fn read(&self) -> StubReaderFuture { StubReaderFuture(self.0) }
-//! # }
-//! # struct StubReaderFuture(&'static [u8]);
-//! # impl std::future::Future for StubReaderFuture {
-//! #     type Output = jxl_oxide::Result<&'static [u8]>;
-//! #     fn poll(
-//! #         self: std::pin::Pin<&mut Self>,
-//! #         cx: &mut std::task::Context<'_>,
-//! #     ) -> std::task::Poll<Self::Output> {
-//! #         std::task::Poll::Ready(Ok(self.0))
-//! #     }
-//! # }
-//! #
+//! # use std::sync::Arc;
 //! # use jxl_oxide::{JxlImage, InitializeResult};
+//! # async fn next_chunk() -> jxl_oxide::Result<Arc<[u8]>> { Ok(Arc::from([])) }
 //! # async fn run() -> jxl_oxide::Result<()> {
-//! # let reader = StubReader(&[
-//! #   0xff, 0x0a, 0x30, 0x54, 0x10, 0x09, 0x08, 0x06, 0x01, 0x00, 0x78, 0x00,
-//! #   0x4b, 0x38, 0x41, 0x3c, 0xb6, 0x3a, 0x51, 0xfe, 0x00, 0x47, 0x1e, 0xa0,
-//! #   0x85, 0xb8, 0x27, 0x1a, 0x48, 0x45, 0x84, 0x1b, 0x71, 0x4f, 0xa8, 0x3e,
-//! #   0x8e, 0x30, 0x03, 0x92, 0x84, 0x01,
-//! # ]);
 //! let mut uninit_image = JxlImage::builder().build_uninit();
-//! let image = loop {
-//!     uninit_image.feed_bytes(reader.read().await?);
+//! let mut image = loop {
+//!     uninit_image.feed(next_chunk().await?)?;
 //!     match uninit_image.try_init()? {
-//!         InitializeResult::NeedMoreData(uninit) => {
-//!             uninit_image = uninit;
-//!         }
-//!         InitializeResult::Initialized(image) => {
-//!             break image;
-//!         }
+//!         InitializeResult::NeedMoreData(uninit) => uninit_image = uninit,
+//!         InitializeResult::Initialized(image) => break image,
 //!     }
 //! };
-//! println!("{:?}", image.image_header()); // Prints the image header
+//! while !image.is_loading_done() {
+//!     image.feed(next_chunk().await?)?;
+//! }
+//! image.finalize()?;
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! For complete input use [`JxlImageBuilder::read_bytes`] with an `Arc<[u8]>`.
 //!
 //! `JxlImage` parses the image header and embedded ICC profile (if there's any). Use
 //! [`JxlImage::render_frame`] to render the image.
@@ -136,6 +116,7 @@
 use std::sync::Arc;
 
 use jxl_bitstream::{Bitstream, ContainerParser, ParseEvent};
+pub use jxl_bitstream::{Section, Spans};
 use jxl_frame::FrameContext;
 use jxl_image::BitDepth;
 use jxl_oxide_common::{Bundle, Name};
@@ -196,53 +177,34 @@ impl JxlImageBuilder {
             pool: self.pool.unwrap_or_else(default_pool),
             tracker: self.tracker,
             reader: ContainerParser::new(),
-            buffer: Vec::new(),
+            buffer: Spans::new(),
             aux_boxes: AuxBoxList::new(),
             force_wide_buffers: self.force_wide_buffers,
+            retry_at: 0,
+            end_of_input: false,
         }
     }
 
-    /// Consumes the builder, and creates a JPEG XL image decoder by reading image from the reader.
+    /// Reads complete input into one owned buffer, then calls `read_bytes`.
     pub fn read(self, mut reader: impl std::io::Read) -> Result<JxlImage> {
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes)?;
+        self.read_bytes(Arc::from(bytes))
+    }
+
+    /// Decodes complete input while retaining ranges into the caller's buffer.
+    pub fn read_bytes(self, bytes: Arc<[u8]>) -> Result<JxlImage> {
         let mut uninit = self.build_uninit();
-        let mut buf = vec![0u8; 4096];
-        let mut buf_valid = 0usize;
-        let mut image = loop {
-            let count = reader.read(&mut buf[buf_valid..])?;
-            if count == 0 {
+        uninit.feed(bytes)?;
+        let mut image = match uninit.try_init()? {
+            InitializeResult::Initialized(image) => image,
+            InitializeResult::NeedMoreData(_) => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::UnexpectedEof,
-                    "reader ended before parsing image header",
-                )
-                .into());
-            }
-            buf_valid += count;
-            let consumed = uninit.feed_bytes(&buf[..buf_valid])?;
-            buf.copy_within(consumed..buf_valid, 0);
-            buf_valid -= consumed;
-
-            match uninit.try_init()? {
-                InitializeResult::NeedMoreData(x) => {
-                    uninit = x;
-                }
-                InitializeResult::Initialized(x) => {
-                    break x;
-                }
+                    "input ended before parsing image header",
+                ).into());
             }
         };
-
-        while !image.inner.end_of_image {
-            let count = reader.read(&mut buf[buf_valid..])?;
-            if count == 0 {
-                break;
-            }
-            buf_valid += count;
-            let consumed = image.feed_bytes(&buf[..buf_valid])?;
-            buf.copy_within(consumed..buf_valid, 0);
-            buf_valid -= consumed;
-        }
-
-        buf.truncate(buf_valid);
         image.finalize()?;
         Ok(image)
     }
@@ -253,7 +215,7 @@ impl JxlImageBuilder {
 ///
 /// # Examples
 /// ```no_run
-/// # fn read_bytes() -> jxl_oxide::Result<&'static [u8]> { Ok(&[]) }
+/// # fn read_bytes() -> jxl_oxide::Result<std::sync::Arc<[u8]>> { Ok(std::sync::Arc::from([])) }
 /// # use jxl_oxide::{JxlImage, InitializeResult};
 /// # fn main() -> jxl_oxide::Result<()> {
 /// let mut uninit_image = JxlImage::builder().build_uninit();
@@ -277,28 +239,49 @@ pub struct UninitializedJxlImage {
     pool: JxlThreadPool,
     tracker: Option<AllocTracker>,
     reader: ContainerParser,
-    buffer: Vec<u8>,
+    buffer: Spans,
     aux_boxes: AuxBoxList,
     force_wide_buffers: bool,
+    /// Buffered length before which another header attempt is skipped (geometric backoff).
+    retry_at: usize,
+    /// Set by `end_of_input`; the next `try_init` always attempts a parse.
+    end_of_input: bool,
 }
 
 impl UninitializedJxlImage {
-    /// Feeds more data into the decoder.
-    ///
-    /// Returns total consumed bytes from the buffer.
-    pub fn feed_bytes(&mut self, buf: &[u8]) -> Result<usize> {
-        for event in self.reader.feed_bytes(buf) {
+    /// Declares that no more input will arrive, so the next `try_init` parses whatever is buffered.
+    pub fn end_of_input(&mut self) {
+        self.end_of_input = true;
+    }
+
+    /// The image header and embedded ICC profile are not resumable: a failed attempt reparses from the start.
+    /// Waiting until the buffer grows by half keeps repeated attempts linear in the header size.
+    fn need_more(mut self) -> InitializeResult {
+        let len = self.buffer.len();
+        self.retry_at = len.saturating_add((len / 2).max(4096));
+        InitializeResult::NeedMoreData(self)
+    }
+    /// Appends an immutable chunk. Incomplete input is retained automatically.
+    pub fn feed(&mut self, buf: Arc<[u8]>) -> Result<()> {
+        self.feed_bytes(buf)?;
+        Ok(())
+    }
+
+    /// Feeds a chunk and returns its accepted length. Do not resubmit any suffix.
+    pub fn feed_bytes(&mut self, buf: Arc<[u8]>) -> Result<usize> {
+        let len = buf.len();
+        for event in self.reader.feed_bytes(buf)? {
             match event? {
                 ParseEvent::BitstreamKind(_) => {}
-                ParseEvent::Codestream(buf) => {
-                    self.buffer.extend_from_slice(buf);
+                ParseEvent::Codestream(section) => {
+                    self.buffer.append_spans(section.spans())?;
                 }
                 aux_box_event => {
                     self.aux_boxes.handle_event(aux_box_event)?;
                 }
             }
         }
-        Ok(self.reader.previous_consumed_bytes())
+        Ok(len)
     }
 
     /// Returns the internal reader.
@@ -314,12 +297,15 @@ impl UninitializedJxlImage {
     /// - `Ok(InitializeResult::NeedMoreData(_))` if the data was not enough, and
     /// - `Err(_)` if there was a decode error during the initialization, meaning invalid bitstream
     ///   was given.
-    pub fn try_init(mut self) -> Result<InitializeResult> {
-        let mut bitstream = Bitstream::new(&self.buffer);
+    pub fn try_init(self) -> Result<InitializeResult> {
+        if !self.end_of_input && self.buffer.len() < self.retry_at {
+            return Ok(InitializeResult::NeedMoreData(self));
+        }
+        let mut bitstream = Bitstream::from_spans(&self.buffer);
         let image_header = match ImageHeader::parse(&mut bitstream, ()) {
             Ok(x) => x,
             Err(e) if e.unexpected_eof() => {
-                return Ok(InitializeResult::NeedMoreData(self));
+                return Ok(self.need_more());
             }
             Err(e) => {
                 return Err(e.into());
@@ -330,7 +316,7 @@ impl UninitializedJxlImage {
             let icc = match jxl_color::icc::read_icc(&mut bitstream) {
                 Ok(x) => x,
                 Err(e) if e.unexpected_eof() => {
-                    return Ok(InitializeResult::NeedMoreData(self));
+                    return Ok(self.need_more());
                 }
                 Err(e) => {
                     return Err(e.into());
@@ -342,7 +328,14 @@ impl UninitializedJxlImage {
         } else {
             None
         };
-        bitstream.zero_pad_to_byte()?;
+        match bitstream.zero_pad_to_byte() {
+            Ok(()) => {}
+            Err(e) if e.unexpected_eof() => {
+                return Ok(self.need_more());
+            }
+            Err(e) => return Err(e.into()),
+        }
+        let header_end = bitstream.num_read_bits() / 8;
 
         let image_header = Arc::new(image_header);
         let skip_bytes = if image_header.metadata.preview.is_some() {
@@ -356,7 +349,7 @@ impl UninitializedJxlImage {
             ) {
                 Ok(x) => x,
                 Err(e) if e.unexpected_eof() => {
-                    return Ok(InitializeResult::NeedMoreData(self));
+                    return Ok(self.need_more());
                 }
                 Err(e) => {
                     return Err(e.into());
@@ -365,8 +358,10 @@ impl UninitializedJxlImage {
 
             let bytes_read = bitstream.num_read_bits() / 8;
             let x = frame.toc().total_byte_size();
-            if self.buffer.len() < bytes_read + x {
-                return Ok(InitializeResult::NeedMoreData(self));
+            let preview_end = bytes_read.checked_add(x)
+                .ok_or(jxl_bitstream::Error::ValidationFailed("preview extent overflow"))?;
+            if self.buffer.len() < preview_end {
+                return Ok(self.need_more());
             }
 
             x
@@ -374,8 +369,9 @@ impl UninitializedJxlImage {
             0usize
         };
 
-        let bytes_read = bitstream.num_read_bits() / 8 + skip_bytes;
-        self.buffer.drain(..bytes_read);
+        let bytes_read = (bitstream.num_read_bits() / 8).checked_add(skip_bytes)
+            .ok_or(jxl_bitstream::Error::ValidationFailed("image header extent overflow"))?;
+        let header_data = self.buffer.section(0..header_end)?;
 
         let render_spot_color = !image_header.metadata.grayscale();
 
@@ -393,17 +389,18 @@ impl UninitializedJxlImage {
             pool: self.pool.clone(),
             reader: self.reader,
             image_header,
+            header_data,
             ctx: Box::new(ctx),
             render_spot_color,
             inner: JxlImageInner {
                 end_of_image: false,
-                buffer: Vec::new(),
+                buffer: self.buffer,
                 buffer_offset: bytes_read,
                 frame_offsets: Vec::new(),
                 aux_boxes: self.aux_boxes,
             },
         };
-        image.inner.feed_bytes_inner(&mut image.ctx, &self.buffer)?;
+        image.inner.feed_bytes_inner(&mut image.ctx)?;
 
         Ok(InitializeResult::Initialized(image))
     }
@@ -423,6 +420,7 @@ pub struct JxlImage {
     pool: JxlThreadPool,
     reader: ContainerParser,
     image_header: Arc<ImageHeader>,
+    header_data: Section,
     ctx: Box<RenderContext>,
     render_spot_color: bool,
     inner: JxlImageInner,
@@ -441,28 +439,41 @@ impl JxlImage {
     }
 
 
-    /// Feeds more data into the decoder.
-    ///
-    /// Returns total consumed bytes from the buffer.
-    pub fn feed_bytes(&mut self, buf: &[u8]) -> Result<usize> {
-        for event in self.reader.feed_bytes(buf) {
+    /// Appends an immutable chunk. Incomplete input is retained automatically.
+    pub fn feed(&mut self, buf: Arc<[u8]>) -> Result<()> {
+        self.feed_bytes(buf)?;
+        Ok(())
+    }
+
+    /// Feeds a chunk and returns its accepted length. Do not resubmit any suffix.
+    pub fn feed_bytes(&mut self, buf: Arc<[u8]>) -> Result<usize> {
+        let len = buf.len();
+        for event in self.reader.feed_bytes(buf)? {
             match event? {
                 ParseEvent::BitstreamKind(_) => {}
-                ParseEvent::Codestream(buf) => {
-                    self.inner.feed_bytes_inner(&mut self.ctx, buf)?;
+                ParseEvent::Codestream(section) => {
+                    self.inner.buffer.append_spans(section.spans())?;
+                    self.inner.feed_bytes_inner(&mut self.ctx)?;
                 }
                 aux_box_event => {
                     self.inner.aux_boxes.handle_event(aux_box_event)?;
                 }
             }
         }
-        Ok(self.reader.previous_consumed_bytes())
+        Ok(len)
     }
 
-    /// Signals the end of bitstream.
+    /// Signals EOF and validates that the container and all frames are complete.
     ///
-    /// This is automatically done if `read()` is used to decode the image.
+    /// This is automatically done by `read()` and `read_bytes()`.
     pub fn finalize(&mut self) -> Result<()> {
+        self.reader.finalize()?;
+        if !self.inner.end_of_image {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "input ended before loading all image frames",
+            ).into());
+        }
         self.inner.aux_boxes.eof()?;
         Ok(())
     }
@@ -474,6 +485,11 @@ impl JxlImage {
     #[inline]
     pub fn image_header(&self) -> &ImageHeader {
         &self.image_header
+    }
+
+    /// Returns the compressed image header and ICC ranges.
+    pub fn header_data(&self) -> &Section {
+        &self.header_data
     }
 
     /// Returns the image width with orientation applied.
@@ -769,81 +785,49 @@ impl JxlImage {
 #[derive(Debug)]
 struct JxlImageInner {
     end_of_image: bool,
-    buffer: Vec<u8>,
+    buffer: Spans,
     buffer_offset: usize,
     frame_offsets: Vec<usize>,
     aux_boxes: AuxBoxList,
 }
 
 impl JxlImageInner {
-    fn feed_bytes_inner(&mut self, ctx: &mut RenderContext, mut buf: &[u8]) -> Result<()> {
-        if buf.is_empty() {
-            return Ok(());
-        }
-
-        if self.end_of_image {
-            self.buffer.extend_from_slice(buf);
-            return Ok(());
-        }
-
-        if let Some(loading_frame) = ctx.current_loading_frame() {
-            debug_assert!(self.buffer.is_empty());
-            let len = buf.len();
-            buf = loading_frame.feed_bytes(buf)?;
-            let count = len - buf.len();
-            self.buffer_offset += count;
-
-            if loading_frame.is_loading_done() {
-                let is_last = loading_frame.header().is_last;
-                ctx.finalize_current_frame();
-                if is_last {
-                    self.end_of_image = true;
-                    self.buffer = buf.to_vec();
+    fn feed_bytes_inner(&mut self, ctx: &mut RenderContext) -> Result<()> {
+        while !self.end_of_image {
+            if ctx.current_loading_frame().is_none() {
+                if self.buffer_offset == self.buffer.len() {
                     return Ok(());
                 }
+                let pending = self.buffer.section(self.buffer_offset..self.buffer.len())?;
+                let mut bitstream = Bitstream::from_section(&pending);
+                let frame = match ctx.load_frame_header(&mut bitstream) {
+                    Ok(frame) => frame,
+                    Err(e) if e.unexpected_eof() => return Ok(()),
+                    Err(e) => return Err(e.into()),
+                };
+                let frame_index = frame.index();
+                assert_eq!(self.frame_offsets.len(), frame_index);
+                self.frame_offsets.push(self.buffer_offset);
+                self.buffer_offset = self.buffer_offset
+                    .checked_add(bitstream.num_read_bits() / 8)
+                    .filter(|offset| *offset <= self.buffer.len())
+                    .ok_or(jxl_bitstream::Error::ValidationFailed("frame header extent overflow"))?;
             }
-            if buf.is_empty() {
+            let frame = ctx.current_loading_frame()
+                .ok_or(jxl_bitstream::Error::ValidationFailed("missing loading frame"))?;
+            let count = frame.feed_spans(&self.buffer, self.buffer_offset..self.buffer.len())?;
+            self.buffer_offset = self.buffer_offset.checked_add(count)
+                .filter(|offset| *offset <= self.buffer.len())
+                .ok_or(jxl_bitstream::Error::ValidationFailed("frame data extent overflow"))?;
+            if !frame.is_loading_done() {
                 return Ok(());
             }
-        }
-
-        self.buffer.extend_from_slice(buf);
-        let mut buf = &*self.buffer;
-        while !buf.is_empty() {
-            let mut bitstream = Bitstream::new(buf);
-            let frame = match ctx.load_frame_header(&mut bitstream) {
-                Ok(x) => x,
-                Err(e) if e.unexpected_eof() => {
-                    self.buffer = buf.to_vec();
-                    return Ok(());
-                }
-                Err(e) => {
-                    return Err(e.into());
-                }
-            };
-            let frame_index = frame.index();
-            assert_eq!(self.frame_offsets.len(), frame_index);
-            self.frame_offsets.push(self.buffer_offset);
-
-            let read_bytes = bitstream.num_read_bits() / 8;
-            buf = &buf[read_bytes..];
-            let len = buf.len();
-            buf = frame.feed_bytes(buf)?;
-            let read_bytes = read_bytes + (len - buf.len());
-            self.buffer_offset += read_bytes;
-
-            if frame.is_loading_done() {
-                let is_last = frame.header().is_last;
-                ctx.finalize_current_frame();
-                if is_last {
-                    self.end_of_image = true;
-                    self.buffer = buf.to_vec();
-                    return Ok(());
-                }
+            let is_last = frame.header().is_last;
+            ctx.finalize_current_frame();
+            if is_last {
+                self.end_of_image = true;
             }
         }
-
-        self.buffer.clear();
         Ok(())
     }
 }

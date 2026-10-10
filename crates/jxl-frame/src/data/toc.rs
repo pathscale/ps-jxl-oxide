@@ -160,17 +160,18 @@ impl Toc {
 }
 
 impl Toc {
-    pub(crate) fn adjust_offsets(&mut self, global_frame_offset: usize) {
+    pub(crate) fn adjust_offsets(&mut self, global_frame_offset: usize) -> Result<()> {
         if global_frame_offset == 0 {
-            return;
+            return Ok(());
         }
 
         for group in &mut self.groups {
             group.offset = group
                 .offset
                 .checked_sub(global_frame_offset)
-                .expect("group offset is smaller than global frame offset");
+                .ok_or(jxl_bitstream::Error::ValidationFailed("invalid TOC offset"))?;
         }
+        Ok(())
     }
 }
 
@@ -184,7 +185,10 @@ impl Bundle<&crate::FrameHeader> for Toc {
         let entry_count = if num_groups == 1 && num_passes == 1 {
             1
         } else {
-            1 + ctx.num_lf_groups() + 1 + num_groups * num_passes
+            num_groups.checked_mul(num_passes)
+                .and_then(|count| count.checked_add(ctx.num_lf_groups()))
+                .and_then(|count| count.checked_add(2))
+                .ok_or(jxl_bitstream::Error::ValidationFailed("TOC entry count overflow"))?
         };
 
         if entry_count > 65536 {
@@ -214,8 +218,13 @@ impl Bundle<&crate::FrameHeader> for Toc {
         let mut total_size = 0usize;
         for &size in &sizes {
             offsets.push(acc);
-            acc += size as usize;
-            total_size += size as usize;
+            let size = usize::try_from(size)
+                .map_err(|_| jxl_bitstream::Error::ValidationFailed("TOC size overflow"))?;
+            acc = acc.checked_add(size)
+                .filter(|end| end.checked_mul(8).is_some())
+                .ok_or(jxl_bitstream::Error::ValidationFailed("TOC offset overflow"))?;
+            total_size = total_size.checked_add(size)
+                .ok_or(jxl_bitstream::Error::ValidationFailed("TOC total size overflow"))?;
         }
 
         let section_kinds = if entry_count == 1 {
@@ -239,6 +248,18 @@ impl Bundle<&crate::FrameHeader> for Toc {
         };
 
         let (offsets, sizes, bitstream_to_original, original_to_bitstream) = if permutated_toc {
+            if permutation.len() != sizes.len() {
+                return Err(crate::Error::InvalidTocPermutation);
+            }
+            let mut seen = vec![false; sizes.len()];
+            for &index in &permutation {
+                let Some(entry) = seen.get_mut(index) else {
+                    return Err(crate::Error::InvalidTocPermutation);
+                };
+                if std::mem::replace(entry, true) {
+                    return Err(crate::Error::InvalidTocPermutation);
+                }
+            }
             let mut bitstream_to_original = vec![0usize; permutation.len()];
             let mut offsets_out = Vec::with_capacity(permutation.len());
             let mut sizes_out = Vec::with_capacity(permutation.len());
@@ -269,3 +290,4 @@ impl Bundle<&crate::FrameHeader> for Toc {
         })
     }
 }
+

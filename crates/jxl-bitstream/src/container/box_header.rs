@@ -21,6 +21,9 @@ pub enum HeaderParseResult {
 
 impl ContainerBoxHeader {
     pub(super) fn parse(buf: &[u8]) -> Result<HeaderParseResult, Error> {
+        if buf.starts_with(&[0, 0, 0, 1]) && buf.len() < 16 {
+            return Ok(HeaderParseResult::NeedMoreData);
+        }
         let (tbox, box_size, header_size) = match *buf {
             #[rustfmt::skip]
             [0, 0, 0, 1, t0, t1, t2, t3, s0, s1, s2, s3, s4, s5, s6, s7, ..] => {
@@ -117,3 +120,4 @@ impl ContainerBoxType {
     /// HDR gain map box.
     pub const HDR_GAIN_MAP: Self = Self(*b"jhgm");
 }
+

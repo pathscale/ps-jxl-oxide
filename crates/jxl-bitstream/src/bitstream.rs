@@ -1,6 +1,6 @@
-use crate::{BitstreamResult, Error};
+use crate::{BitstreamResult, Error, Section, Spans};
 
-/// Bitstream reader with borrowed in-memory buffer.
+/// Bitstream reader over a borrowed contiguous buffer or immutable spans.
 ///
 /// Implementation is mostly from [jxl-rs].
 ///
@@ -8,6 +8,10 @@ use crate::{BitstreamResult, Error};
 #[derive(Clone)]
 pub struct Bitstream<'buf> {
     bytes: &'buf [u8],
+    spans: Option<&'buf Spans>,
+    next_span: usize,
+    remaining_bytes: usize,
+    logical_start: usize,
     buf: u64,
     num_read_bits: usize,
     remaining_buf_bits: usize,
@@ -20,8 +24,8 @@ impl std::fmt::Debug for Bitstream<'_> {
                 "bytes",
                 &format_args!(
                     "({} byte{} left)",
-                    self.bytes.len(),
-                    if self.bytes.len() == 1 { "" } else { "s" },
+                    self.remaining_bytes,
+                    if self.remaining_bytes == 1 { "" } else { "s" },
                 ),
             )
             .field("buf", &format_args!("0x{:016x}", self.buf))
@@ -37,10 +41,44 @@ impl<'buf> Bitstream<'buf> {
     pub fn new(bytes: &'buf [u8]) -> Self {
         Self {
             bytes,
+            spans: None,
+            next_span: 0,
+            remaining_bytes: bytes.len(),
+            logical_start: 0,
             buf: 0,
             num_read_bits: 0,
             remaining_buf_bits: 0,
         }
+    }
+
+    /// Creates a segmented reader without copying any input bytes.
+    pub fn from_spans(spans: &'buf Spans) -> Self {
+        Self {
+            bytes: spans.span_bytes(0).unwrap_or(&[]),
+            spans: Some(spans),
+            next_span: 1,
+            remaining_bytes: spans.len(),
+            logical_start: 0,
+            buf: 0,
+            num_read_bits: 0,
+            remaining_buf_bits: 0,
+        }
+    }
+
+    /// Creates a reader retaining the section's logical origin.
+    pub fn from_section(section: &'buf Section) -> Self {
+        let mut reader = Self::from_spans(section.spans());
+        reader.logical_start = section.range().start;
+        reader
+    }
+
+    /// Describes bytes from this reader's source, when it is span-backed.
+    pub fn source_section(&self, range: std::ops::Range<usize>) -> Option<BitstreamResult<Section>> {
+        self.spans.map(|spans| {
+            let start = self.logical_start.checked_add(range.start)
+                .ok_or(Error::ValidationFailed("section origin overflow"))?;
+            Section::new(start, spans.slice(range)?)
+        })
     }
 
     /// Returns the number of bits that are read or skipped.
@@ -54,11 +92,13 @@ impl Bitstream<'_> {
     /// Fills bit buffer from byte buffer.
     #[inline]
     fn refill(&mut self) {
+        self.advance_span();
         if let &[b0, b1, b2, b3, b4, b5, b6, b7, ..] = self.bytes {
             let bits = u64::from_le_bytes([b0, b1, b2, b3, b4, b5, b6, b7]);
             self.buf |= bits << self.remaining_buf_bits;
             let read_bytes = (63 - self.remaining_buf_bits) >> 3;
             self.remaining_buf_bits |= 56;
+            self.remaining_bytes -= read_bytes;
             // SAFETY: read_bytes < 8, self.bytes.len() >= 8 (from the pattern).
             self.bytes = unsafe {
                 std::slice::from_raw_parts(
@@ -71,9 +111,35 @@ impl Bitstream<'_> {
         }
     }
 
+    #[inline]
+    fn advance_span(&mut self) {
+        if self.bytes.is_empty()
+            && let Some(spans) = self.spans
+            && let Some(bytes) = spans.span_bytes(self.next_span)
+        {
+            self.bytes = bytes;
+            self.next_span += 1;
+        }
+    }
+
+    fn skip_bytes(&mut self, count: usize) {
+        debug_assert!(count <= self.remaining_bytes);
+        self.remaining_bytes -= count;
+        if count <= self.bytes.len() {
+            self.bytes = &self.bytes[count..];
+        } else if let Some(spans) = self.spans {
+            let (index, bytes) = spans.locate(spans.len() - self.remaining_bytes);
+            self.bytes = bytes;
+            self.next_span = index + 1;
+        } else {
+            unreachable!("contiguous skip exceeded its input");
+        }
+    }
+
     #[inline(never)]
     fn refill_slow(&mut self) {
         while self.remaining_buf_bits < 56 {
+            self.advance_span();
             let Some((&b, next)) = self.bytes.split_first() else {
                 return;
             };
@@ -81,6 +147,7 @@ impl Bitstream<'_> {
             self.buf |= (b as u64) << self.remaining_buf_bits;
             self.remaining_buf_bits += 8;
             self.bytes = next;
+            self.remaining_bytes -= 1;
         }
     }
 }
@@ -177,27 +244,24 @@ impl Bitstream<'_> {
         self.num_read_bits += self.remaining_buf_bits;
         self.buf = 0;
         self.remaining_buf_bits = 0;
-        if n > self.bytes.len() * 8 {
-            self.num_read_bits += self.bytes.len() * 8;
+        let available = self.remaining_bytes.checked_mul(8)
+            .ok_or(Error::ValidationFailed("bitstream length overflow"))?;
+        if n > available {
+            self.num_read_bits += available;
+            self.skip_bytes(self.remaining_bytes);
             return Err(Error::Io(std::io::ErrorKind::UnexpectedEof.into()));
         }
 
-        self.num_read_bits += n;
-        self.bytes = &self.bytes[n / 8..];
+        self.skip_bytes(n / 8);
+        self.num_read_bits += n & !7;
         n %= 8;
         self.refill();
-        self.remaining_buf_bits = self
-            .remaining_buf_bits
-            .checked_sub(n)
-            .ok_or(Error::Io(std::io::ErrorKind::UnexpectedEof.into()))?;
-        self.buf >>= n;
-        Ok(())
+        self.consume_bits(n)
     }
 
     /// Performs `ZeroPadToByte` as defined in the JPEG XL specification.
     pub fn zero_pad_to_byte(&mut self) -> BitstreamResult<()> {
-        let byte_boundary = self.num_read_bits.div_ceil(8) * 8;
-        let n = byte_boundary - self.num_read_bits;
+        let n = (8 - (self.num_read_bits & 7)) & 7;
         if self.read_bits(n)? != 0 {
             Err(Error::NonZeroPadding)
         } else {
@@ -340,3 +404,4 @@ impl std::ops::Add<U> for u32 {
         U32Specifier::BitsOffset(self, rhs.0)
     }
 }
+

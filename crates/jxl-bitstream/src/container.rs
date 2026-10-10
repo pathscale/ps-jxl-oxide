@@ -1,5 +1,9 @@
 //! Types for JPEG XL container format.
 
+use std::sync::Arc;
+
+use crate::{BitstreamResult, Error, Spans};
+
 mod box_header;
 mod parse;
 
@@ -11,10 +15,14 @@ pub use parse::*;
 pub struct ContainerParser {
     state: DetectState,
     jxlp_index_state: JxlpIndexState,
+    source: Spans,
+    cursor: usize,
     previous_consumed_bytes: usize,
+    failed: bool,
+    finalized: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 enum DetectState {
     #[default]
     WaitingSignature,
@@ -71,26 +79,58 @@ impl ContainerParser {
         }
     }
 
-    /// Feeds bytes to the parser, and receives parser events.
+    /// Appends an owned chunk and receives parser events.
     ///
-    /// The parser might not consume all of the buffer. Use [`previous_consumed_bytes`] to get how
-    /// many bytes are consumed. Bytes not consumed by the parser should be fed into the parser
-    /// again.
-    ///
-    /// [`previous_consumed_bytes`]: Self::previous_consumed_bytes
-    pub fn feed_bytes<'inner, 'buf>(
-        &'inner mut self,
-        input: &'buf [u8],
-    ) -> ParseEvents<'inner, 'buf> {
-        ParseEvents::new(self, input)
+    /// Exhaust the iterator before feeding another chunk. All input is retained;
+    /// incomplete signatures, headers and indexes must not be resubmitted.
+    pub fn feed_bytes(&mut self, input: Arc<[u8]>) -> BitstreamResult<ParseEvents<'_>> {
+        if self.failed || self.finalized {
+            return Err(Error::InvalidBox);
+        }
+        let len = input.len();
+        self.source.append(input, 0..len)?;
+        self.previous_consumed_bytes = len;
+        Ok(ParseEvents::new(self))
     }
 
-    /// Get how many bytes are consumed by the previous call to [`feed_bytes`].
-    ///
-    /// Bytes not consumed by the parser should be fed into the parser again.
-    ///
-    /// [`feed_bytes`]: Self::feed_bytes
+    /// Returns how many bytes were accepted by the previous feed.
     pub fn previous_consumed_bytes(&self) -> usize {
         self.previous_consumed_bytes
     }
+
+    /// Validates that EOF is at a complete container boundary.
+    pub fn finalize(&mut self) -> BitstreamResult<()> {
+        if self.finalized {
+            return Ok(());
+        }
+        if self.failed {
+            return Err(Error::InvalidBox);
+        }
+        if self.cursor != self.source.len() {
+            return Err(Error::Io(std::io::ErrorKind::UnexpectedEof.into()));
+        }
+        if matches!(self.jxlp_index_state, JxlpIndexState::Jxlp(_)) {
+            return Err(Error::Io(std::io::ErrorKind::UnexpectedEof.into()));
+        }
+        let complete = match self.state {
+            DetectState::WaitingBoxHeader => {
+                !matches!(self.jxlp_index_state, JxlpIndexState::Initial)
+            }
+            DetectState::InAuxBox { ref header, brotli_box_type, bytes_left: None } => {
+                !matches!(self.jxlp_index_state, JxlpIndexState::Initial)
+                    && (header.box_type() != ContainerBoxType::BROTLI_COMPRESSED
+                        || brotli_box_type.is_some())
+            }
+            DetectState::InCodestream { kind, bytes_left: None, .. } => {
+                kind != BitstreamKind::Invalid
+            }
+            _ => false,
+        };
+        if !complete {
+            return Err(Error::Io(std::io::ErrorKind::UnexpectedEof.into()));
+        }
+        self.finalized = true;
+        Ok(())
+    }
 }
+

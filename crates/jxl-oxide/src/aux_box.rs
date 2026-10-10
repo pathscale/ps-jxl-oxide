@@ -271,7 +271,9 @@ impl AuxBoxList {
             ParseEvent::AuxBoxData(ty, buf) => {
                 self.current_box_ty = Some(ty);
                 if ty != ContainerBoxType::JPEG_RECONSTRUCTION {
-                    self.current_box.feed_data(buf)?;
+                    for chunk in buf.spans().chunks() {
+                        self.current_box.feed_data(chunk)?;
+                    }
                 }
             }
             ParseEvent::AuxBoxEnd(ty) => {
@@ -331,4 +333,5 @@ impl AuxBoxList {
         self.first_of_type(ContainerBoxType::XML)
     }
 }
+
 
