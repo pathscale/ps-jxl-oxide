@@ -1,0 +1,16 @@
+[package]
+name = "ps-jxl-check"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "JPEG XL conformance checker and decode timing tool"
+publish = false
+autotests = false
+autobenches = false
+
+[dependencies]
+jxl-oxide = { path = "../../crates/jxl-oxide", default-features = false }
+
+[[bin]]
+name = "ps-jxl-check"
+path = "src/main.rs"
