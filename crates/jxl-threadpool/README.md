@@ -1,3 +1,4 @@
 # jxl-threadpool
-This crate provides an abstraction over various thread pool implementations for use in other
-jxl-oxide crates.
+This crate preserves the task-dispatch interface used by other jxl-oxide crates. All closures run
+inline, and the wrapper has no multithreading capability or pool dependencies.
+

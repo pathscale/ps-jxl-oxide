@@ -5,16 +5,8 @@
 //! # Decoding an image
 //!
 //! Decoding a JPEG XL image starts with constructing [`JxlImage`]. First create a builder using
-//! [`JxlImage::builder`], and use [`open`][JxlImageBuilder::open] to read a file:
-//!
-//! ```no_run
-//! # use jxl_oxide::JxlImage;
-//! let image = JxlImage::builder().open("input.jxl").expect("Failed to read image header");
-//! println!("{:?}", image.image_header()); // Prints the image header
-//! ```
-//!
-//! Or, if you're reading from a reader that implements [`Read`][std::io::Read], you can use
-//! [`read`][JxlImageBuilder::read]:
+//! [`JxlImage::builder`], and use [`read`][JxlImageBuilder::read] to read from a reader that
+//! implements [`Read`][std::io::Read]:
 //!
 //! ```no_run
 //! # use jxl_oxide::JxlImage;
@@ -78,7 +70,7 @@
 //!
 //! # fn present_image(_: Render) {}
 //! # fn main() -> jxl_oxide::Result<()> {
-//! # let image = JxlImage::builder().open("input.jxl").unwrap();
+//! # let image = JxlImage::builder().read(std::io::empty()).unwrap();
 //! for keyframe_idx in 0..image.num_loaded_keyframes() {
 //!     let render = image.render_frame(keyframe_idx)?;
 //!     present_image(render);
@@ -108,8 +100,8 @@
 //! image.request_color_encoding(color_encoding);
 //! ```
 //!
-//! External CMS is set to Little CMS 2 by default if `lcms2` feature is enabled. You can
-//! explicitly disable this by setting CMS to [`NullCms`].
+//! External CMS defaults to [`NullCms`]. Set a custom [`ColorManagementSystem`] implementation
+//! to handle arbitrary ICC profiles.
 //!
 //! ```no_run
 //! # use jxl_oxide::{JxlImage, NullCms};
@@ -129,7 +121,7 @@
 //!
 //! # fn present_image_with_cms(_: Render, _: &[u8]) {}
 //! # fn main() -> jxl_oxide::Result<()> {
-//! # let image = JxlImage::builder().open("input.jxl").unwrap();
+//! # let image = JxlImage::builder().read(std::io::empty()).unwrap();
 //! let icc_profile = image.rendered_icc();
 //! for keyframe_idx in 0..image.num_loaded_keyframes() {
 //!     let render = image.render_frame(keyframe_idx)?;
@@ -138,12 +130,6 @@
 //! # Ok(())
 //! # }
 //! ```
-//!
-//! # Feature flags
-//! - `rayon`: Enable multithreading with Rayon. (*default*)
-//! - `image`: Enable integration with `image` crate.
-//! - `lcms2`: Enable integration with Little CMS 2.
-//! - `moxcms`: Enable integration with `moxcms` crate.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
@@ -164,32 +150,15 @@ pub use jxl_frame::{Frame, FrameHeader};
 pub use jxl_grid::{AlignedGrid, AllocTracker};
 pub use jxl_image::color::{self, EnumColourEncoding, RenderingIntent};
 pub use jxl_image::{self as image, ExtraChannelType, ImageHeader};
-pub use jxl_jbr as jpeg_bitstream;
 pub use jxl_threadpool::JxlThreadPool;
 
 mod aux_box;
 mod fb;
-pub mod integration;
-#[cfg(feature = "lcms2")]
-mod lcms2;
-#[cfg(feature = "moxcms")]
-mod moxcms;
-
-#[cfg(feature = "lcms2")]
-pub use self::lcms2::Lcms2;
-#[cfg(feature = "moxcms")]
-pub use self::moxcms::Moxcms;
 pub use aux_box::{AuxBoxData, AuxBoxList, RawExif};
 pub use fb::{FrameBuffer, FrameBufferSample, ImageStream};
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
 
-#[cfg(feature = "rayon")]
-fn default_pool() -> JxlThreadPool {
-    JxlThreadPool::rayon_global()
-}
-
-#[cfg(not(feature = "rayon"))]
 fn default_pool() -> JxlThreadPool {
     JxlThreadPool::none()
 }
@@ -278,11 +247,6 @@ impl JxlImageBuilder {
         Ok(image)
     }
 
-    /// Consumes the builder, and creates a JPEG XL image decoder by reading image from the file.
-    pub fn open(self, path: impl AsRef<std::path::Path>) -> Result<JxlImage> {
-        let file = std::fs::File::open(path)?;
-        self.read(file)
-    }
 }
 
 /// Empty, uninitialized JPEG XL image.
@@ -423,12 +387,7 @@ impl UninitializedJxlImage {
             builder = builder.alloc_tracker(tracker);
         }
         builder = builder.force_wide_buffers(self.force_wide_buffers);
-        #[cfg_attr(not(any(feature = "lcms2", feature = "moxcms")), allow(unused_mut))]
-        let mut ctx = builder.build(image_header.clone())?;
-        #[cfg(feature = "lcms2")]
-        ctx.set_cms(Lcms2);
-        #[cfg(all(not(feature = "lcms2"), feature = "moxcms"))]
-        ctx.set_cms(Moxcms);
+        let ctx = builder.build(image_header.clone())?;
 
         let mut image = JxlImage {
             pool: self.pool.clone(),
@@ -481,10 +440,6 @@ impl JxlImage {
         Self::builder().read(reader)
     }
 
-    /// Opens an image in the filesystem with default options.
-    pub fn open_with_defaults(path: impl AsRef<std::path::Path>) -> Result<JxlImage> {
-        Self::builder().open(path)
-    }
 
     /// Feeds more data into the decoder.
     ///
@@ -506,7 +461,7 @@ impl JxlImage {
 
     /// Signals the end of bitstream.
     ///
-    /// This is automatically done if `open()` or `read()` is used to decode the image.
+    /// This is automatically done if `read()` is used to decode the image.
     pub fn finalize(&mut self) -> Result<()> {
         self.inner.aux_boxes.eof()?;
         Ok(())
@@ -794,115 +749,6 @@ impl JxlImage {
     }
 }
 
-/// # JPEG bitstream reconstruction
-impl JxlImage {
-    /// Returns availability and validity of JPEG bitstream reconstruction data.
-    pub fn jpeg_reconstruction_status(&self) -> JpegReconstructionStatus {
-        match self.inner.aux_boxes.jbrd() {
-            AuxBoxData::Data(jbrd) => {
-                let header = jbrd.header();
-                let Ok(exif) = self.inner.aux_boxes.first_exif() else {
-                    return JpegReconstructionStatus::Invalid;
-                };
-                let xml = self.inner.aux_boxes.first_xml();
-
-                if header.expected_icc_len() > 0 {
-                    if !self.image_header.metadata.colour_encoding.want_icc() {
-                        return JpegReconstructionStatus::Invalid;
-                    } else if self.original_icc().is_none() {
-                        return JpegReconstructionStatus::NeedMoreData;
-                    }
-                }
-                if header.expected_exif_len() > 0 {
-                    if exif.is_decoding() {
-                        return JpegReconstructionStatus::NeedMoreData;
-                    } else if exif.is_not_found() {
-                        return JpegReconstructionStatus::Invalid;
-                    }
-                }
-                if header.expected_xmp_len() > 0 {
-                    if xml.is_decoding() {
-                        return JpegReconstructionStatus::NeedMoreData;
-                    } else if xml.is_not_found() {
-                        return JpegReconstructionStatus::Invalid;
-                    }
-                }
-
-                JpegReconstructionStatus::Available
-            }
-            AuxBoxData::Decoding => {
-                if self.num_loaded_frames() >= 2 {
-                    return JpegReconstructionStatus::Invalid;
-                }
-                let Some(frame) = self.frame(0) else {
-                    return JpegReconstructionStatus::NeedMoreData;
-                };
-                let frame_header = frame.header();
-                if frame_header.encoding != jxl_frame::header::Encoding::VarDct {
-                    return JpegReconstructionStatus::Invalid;
-                }
-                if !frame_header.frame_type.is_normal_frame() {
-                    return JpegReconstructionStatus::Invalid;
-                }
-                JpegReconstructionStatus::NeedMoreData
-            }
-            AuxBoxData::NotFound => JpegReconstructionStatus::Unavailable,
-        }
-    }
-
-    /// Reconstructs JPEG bitstream and writes the image to writer.
-    ///
-    /// # Errors
-    /// Returns an error if the reconstruction data is not available, incomplete or invalid, or
-    /// if there was an error writing the image.
-    ///
-    /// Note that reconstruction may fail even if `jpeg_reconstruction_status` returned `Available`.
-    pub fn reconstruct_jpeg(&self, jpeg_output: impl std::io::Write) -> Result<()> {
-        let aux_boxes = &self.inner.aux_boxes;
-        let jbrd = match aux_boxes.jbrd() {
-            AuxBoxData::Data(jbrd) => jbrd,
-            AuxBoxData::Decoding => {
-                return Err(jxl_jbr::Error::ReconstructionDataIncomplete.into());
-            }
-            AuxBoxData::NotFound => {
-                return Err(jxl_jbr::Error::ReconstructionUnavailable.into());
-            }
-        };
-        if self.num_loaded_frames() == 0 {
-            return Err(jxl_jbr::Error::FrameDataIncomplete.into());
-        }
-
-        let jbrd_header = jbrd.header();
-        let expected_icc_len = jbrd_header.expected_icc_len();
-        let expected_exif_len = jbrd_header.expected_exif_len();
-        let expected_xmp_len = jbrd_header.expected_xmp_len();
-
-        let icc = if expected_icc_len > 0 {
-            self.original_icc().unwrap_or(&[])
-        } else {
-            &[]
-        };
-
-        let exif = if expected_exif_len > 0 {
-            let b = aux_boxes.first_exif()?;
-            b.map(|x| x.payload()).unwrap_or(&[])
-        } else {
-            &[]
-        };
-
-        let xmp = if expected_xmp_len > 0 {
-            aux_boxes.first_xml().unwrap_or(&[])
-        } else {
-            &[]
-        };
-
-        let frame = self.frame(0).unwrap();
-        jbrd.reconstruct(frame, icc, exif, xmp, &self.pool)?
-            .write(jpeg_output)?;
-
-        Ok(())
-    }
-}
 
 /// # Private methods
 impl JxlImage {
@@ -1287,16 +1133,4 @@ impl From<jxl_render::Region> for CropInfo {
     }
 }
 
-/// Availability and validity of JPEG bitstream reconstruction data.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum JpegReconstructionStatus {
-    /// JPEG bitstream reconstruction data is found. Actual reconstruction may or may not succeed.
-    Available,
-    /// Either JPEG bitstream reconstruction data or JPEG XL image data is invalid and cannot be
-    /// used for actual reconstruction.
-    Invalid,
-    /// JPEG bitstream reconstruction data is not found. Result will *not* change.
-    Unavailable,
-    /// JPEG bitstream reconstruction data is not found. Result may change with more data.
-    NeedMoreData,
-}
+

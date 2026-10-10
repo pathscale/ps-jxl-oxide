@@ -5,43 +5,11 @@
 
 A spec-conforming JPEG XL decoder written in pure Rust.
 
-If you want to use it as a library, add `jxl-oxide` in `Cargo.toml`. `jxl-oxide` is a blanket crate
-which covers various components of jxl-oxide.
-
-```toml
-[dependencies]
-jxl-oxide = "0.12.5"
-```
-
-## Installing command line tool
-
-Install `jxl-oxide-cli` using `cargo install`. It will install a binary named `jxl-oxide`.
-
-```
-cargo install jxl-oxide-cli
-```
-
-## Feature flags
-
-`jxl-oxide` and `jxl-oxide-cli` have different sets of feature flags.
-
-**For `jxl-oxide`:**
-- `rayon` (default): Enable multithreading using `rayon`.
-- `lcms2`: Integrate into Little CMS 2 which supports arbitrary ICC profiles and enables CMYK to RGB
-  conversion. Note that this will add dependencies written in C.
-- `moxcms`: Integrate into `moxcms` crate which supports arbitrary ICC profiles like `lcms2`.
-  `moxcms` is written in pure Rust, so it won't add any additional C dependency.
-- `image`: Integrate into the `image` crate. `jxl_oxide::integration::JxlDecoder` will be made
-  available.
-
-**For `jxl-oxide-cli`:**
-- `rayon` (default): Enable multithreading using `rayon`.
-- `mimalloc` (default): Use mimalloc as memory allocator.
-- `__devtools` (unstable): Enable devtool subcommands.
-- `__ffmpeg` (unstable): Link to FFmpeg and enable video encoding in devtool subcommands.
+This is the pathscale fork of [tirr-c/jxl-oxide](https://github.com/tirr-c/jxl-oxide), originally developed by Wonwoo Choi and upstream contributors. This stage removes Rayon pools, JPEG bitstream reconstruction, filesystem convenience APIs, `image` integration, and the bundled lcms2 and moxcms adapters. Decode work runs inline through the existing dispatch wrapper; JPEG-transcoded VarDCT pixel decoding, animation and frames, extra channels and alpha, ICC output, orientation, cropping, built-in colour conversion, and the caller-supplied `ColorManagementSystem` boundary remain available. Input still uses `read(impl std::io::Read)` or byte feeding. Later stages will introduce immutable `Arc` inputs, owned task outputs, a nagoya-native asynchronous coordinator, and `no_std + alloc`; crate names remain unchanged in this stage.
 
 ---
 
 Dual-licensed under MIT and Apache 2.0.
 
 [conformance]: https://github.com/libjxl/conformance
+

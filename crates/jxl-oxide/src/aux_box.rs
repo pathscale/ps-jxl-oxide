@@ -7,10 +7,8 @@ use jxl_bitstream::container::ContainerBoxType;
 use crate::Result;
 
 mod exif;
-mod jbrd;
 
 pub use exif::*;
-pub use jbrd::*;
 
 #[derive(Debug, Default)]
 pub struct AuxBoxReader {
@@ -232,7 +230,6 @@ impl<T, E> AuxBoxData<std::result::Result<T, E>> {
 #[derive(Debug)]
 pub struct AuxBoxList {
     boxes: Vec<(ContainerBoxType, AuxBoxReader)>,
-    jbrd: Jbrd,
     current_box_ty: Option<ContainerBoxType>,
     current_box: AuxBoxReader,
     last_box: bool,
@@ -242,7 +239,6 @@ impl AuxBoxList {
     pub(super) fn new() -> Self {
         Self {
             boxes: Vec::new(),
-            jbrd: Jbrd::new(),
             current_box_ty: None,
             current_box: AuxBoxReader::new(),
             last_box: false,
@@ -274,9 +270,7 @@ impl AuxBoxList {
             }
             ParseEvent::AuxBoxData(ty, buf) => {
                 self.current_box_ty = Some(ty);
-                if ty == ContainerBoxType::JPEG_RECONSTRUCTION {
-                    self.jbrd.feed_bytes(buf)?;
-                } else {
+                if ty != ContainerBoxType::JPEG_RECONSTRUCTION {
                     self.current_box.feed_data(buf)?;
                 }
             }
@@ -290,9 +284,7 @@ impl AuxBoxList {
 
     fn finalize(&mut self) -> Result<()> {
         match self.current_box_ty {
-            Some(ContainerBoxType::JPEG_RECONSTRUCTION) => {
-                self.jbrd.finalize()?;
-            }
+            Some(ContainerBoxType::JPEG_RECONSTRUCTION) => {}
             Some(ty) => {
                 self.current_box.finalize()?;
                 let finished_box = std::mem::replace(&mut self.current_box, AuxBoxReader::new());
@@ -315,18 +307,6 @@ impl AuxBoxList {
 }
 
 impl AuxBoxList {
-    pub(crate) fn jbrd(&self) -> AuxBoxData<&jxl_jbr::JpegBitstreamData> {
-        if let Some(data) = self.jbrd.data() {
-            AuxBoxData::Data(data)
-        } else if self.last_box
-            && self.current_box_ty != Some(ContainerBoxType::JPEG_RECONSTRUCTION)
-        {
-            AuxBoxData::NotFound
-        } else {
-            AuxBoxData::Decoding
-        }
-    }
-
     fn first_of_type(&self, ty: ContainerBoxType) -> AuxBoxData<&[u8]> {
         let maybe = self.boxes.iter().find(|&&(ty_to_test, _)| ty_to_test == ty);
         let data = maybe.map(|(_, b)| b.data());
@@ -351,3 +331,4 @@ impl AuxBoxList {
         self.first_of_type(ContainerBoxType::XML)
     }
 }
+

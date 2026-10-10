@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/*"]
+members = ["crates/*", "tools/*"]
 resolver = "2"
 
 [workspace.dependencies.brotli-decompressor]
@@ -16,3 +16,4 @@ features = ["std"]
 [profile.opt]
 inherits = "release"
 debug = 1
+
