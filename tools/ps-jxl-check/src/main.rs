@@ -3,10 +3,10 @@ mod npy;
 mod spec;
 
 use std::ffi::OsString;
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
+use std::sync::Arc;
 
 use jxl_oxide::{FrameBuffer, JxlImage, JxlThreadPool, NullCms};
 
@@ -15,6 +15,8 @@ type CheckResult<T> = Result<T, String>;
 struct Arguments {
     directory: PathBuf,
     only: Option<String>,
+    /// Feed the input through the streaming API in independently allocated chunks of this size.
+    chunk: Option<usize>,
 }
 
 #[derive(Default)]
@@ -79,6 +81,7 @@ fn arguments() -> CheckResult<Option<Arguments>> {
     let mut args = std::env::args_os().skip(1);
     let mut directory = None;
     let mut only = None;
+    let mut chunk = None;
     let mut positional = false;
     while let Some(arg) = args.next() {
         if !positional {
@@ -101,6 +104,16 @@ fn arguments() -> CheckResult<Option<Arguments>> {
                     );
                     continue;
                 }
+                Some("--chunk") => {
+                    let size = args
+                        .next()
+                        .and_then(|value| value.into_string().ok())
+                        .and_then(|value| value.parse::<usize>().ok())
+                        .filter(|size| *size > 0)
+                        .ok_or_else(|| "--chunk requires a positive byte count".to_owned())?;
+                    chunk = Some(size);
+                    continue;
+                }
                 Some(value) if value.starts_with('-') => {
                     return Err(format!("unknown argument: {value}"));
                 }
@@ -115,6 +128,7 @@ fn arguments() -> CheckResult<Option<Arguments>> {
         directory: directory
             .ok_or_else(|| "a conformance directory is required".to_owned())?,
         only,
+        chunk,
     }))
 }
 
@@ -158,7 +172,37 @@ fn read(path: &Path) -> CheckResult<Vec<u8>> {
     std::fs::read(path).map_err(|error| format!("cannot read {}: {error}", path.display()))
 }
 
-fn run_case(directory: &Path, report: &mut Report) -> CheckResult<()> {
+/// Decodes through the streaming API, each chunk in its own allocation so every boundary is a span boundary.
+fn streamed(input: &[u8], size: usize) -> CheckResult<JxlImage> {
+    let mut chunks = input.chunks(size).map(Arc::<[u8]>::from);
+    let mut uninit = JxlImage::builder().pool(JxlThreadPool::none()).build_uninit();
+    let mut image = loop {
+        let ended = match chunks.next() {
+            Some(chunk) => {
+                uninit.feed(chunk).map_err(|error| format!("feed failed: {error}"))?;
+                false
+            }
+            None => {
+                uninit.end_of_input();
+                true
+            }
+        };
+        match uninit.try_init().map_err(|error| format!("init failed: {error}"))? {
+            jxl_oxide::InitializeResult::Initialized(image) => break image,
+            jxl_oxide::InitializeResult::NeedMoreData(_) if ended => {
+                return Err("input ended before the image header".to_owned());
+            }
+            jxl_oxide::InitializeResult::NeedMoreData(more) => uninit = more,
+        }
+    };
+    for chunk in chunks {
+        image.feed(chunk).map_err(|error| format!("feed failed: {error}"))?;
+    }
+    image.finalize().map_err(|error| format!("finalize failed: {error}"))?;
+    Ok(image)
+}
+
+fn run_case(directory: &Path, chunk: Option<usize>, report: &mut Report) -> CheckResult<()> {
     let metadata_path = directory.join("test.json");
     let metadata = read(&metadata_path)?;
     let metadata = std::str::from_utf8(&metadata)
@@ -184,14 +228,17 @@ fn run_case(directory: &Path, report: &mut Report) -> CheckResult<()> {
     report.limits = spec::limits(&metadata, channels)?;
 
     let target_icc = spec::target_icc(&metadata, directory)?;
-    let input = read(&directory.join("input.jxl"))?;
+    let input: Arc<[u8]> = Arc::from(read(&directory.join("input.jxl"))?);
 
     let start = Instant::now();
     let prepared: CheckResult<JxlImage> = (|| {
-        let mut image = JxlImage::builder()
-            .pool(JxlThreadPool::none())
-            .read(Cursor::new(input))
-            .map_err(|error| format!("decode failed: {error}"))?;
+        let mut image = match chunk {
+            None => JxlImage::builder()
+                .pool(JxlThreadPool::none())
+                .read_bytes(input)
+                .map_err(|error| format!("decode failed: {error}"))?,
+            Some(size) => streamed(&input, size)?,
+        };
         image.set_cms(NullCms);
         image.set_render_spot_color(false);
         if let Some(profile) = &target_icc {
@@ -312,7 +359,7 @@ fn execute(args: &Arguments) -> CheckResult<bool> {
         }
         let mut report = Report::default();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_case(&directory, &mut report)
+            run_case(&directory, args.chunk, &mut report)
         }));
         let result = result.unwrap_or_else(|_| Err("checker or decoder panicked".to_owned()));
         report.print(&name, result.is_ok());
@@ -348,3 +395,4 @@ fn main() -> ExitCode {
         }
     }
 }
+
