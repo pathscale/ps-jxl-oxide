@@ -8,7 +8,7 @@ use std::process::ExitCode;
 use std::time::Instant;
 use std::sync::Arc;
 
-use jxl_oxide::{FrameBuffer, JxlImage, JxlThreadPool, NullCms};
+use jxl_oxide::{FrameBuffer, JxlImage, Tasks, NullCms};
 
 type CheckResult<T> = Result<T, String>;
 
@@ -17,6 +17,8 @@ struct Arguments {
     only: Option<String>,
     /// Feed the input through the streaming API in independently allocated chunks of this size.
     chunk: Option<usize>,
+    /// Print a hash of every rendered frame instead of comparing against references.
+    hash: bool,
 }
 
 #[derive(Default)]
@@ -82,6 +84,7 @@ fn arguments() -> CheckResult<Option<Arguments>> {
     let mut directory = None;
     let mut only = None;
     let mut chunk = None;
+    let mut hash = false;
     let mut positional = false;
     while let Some(arg) = args.next() {
         if !positional {
@@ -102,6 +105,10 @@ fn arguments() -> CheckResult<Option<Arguments>> {
                         name.into_string()
                             .map_err(|_| "case names must be UTF-8".to_owned())?,
                     );
+                    continue;
+                }
+                Some("--hash") => {
+                    hash = true;
                     continue;
                 }
                 Some("--chunk") => {
@@ -129,6 +136,7 @@ fn arguments() -> CheckResult<Option<Arguments>> {
             .ok_or_else(|| "a conformance directory is required".to_owned())?,
         only,
         chunk,
+        hash,
     }))
 }
 
@@ -175,7 +183,7 @@ fn read(path: &Path) -> CheckResult<Vec<u8>> {
 /// Decodes through the streaming API, each chunk in its own allocation so every boundary is a span boundary.
 fn streamed(input: &[u8], size: usize) -> CheckResult<JxlImage> {
     let mut chunks = input.chunks(size).map(Arc::<[u8]>::from);
-    let mut uninit = JxlImage::builder().pool(JxlThreadPool::none()).build_uninit();
+    let mut uninit = JxlImage::builder().tasks(Tasks::inline()).build_uninit();
     let mut image = loop {
         let ended = match chunks.next() {
             Some(chunk) => {
@@ -200,6 +208,36 @@ fn streamed(input: &[u8], size: usize) -> CheckResult<JxlImage> {
     }
     image.finalize().map_err(|error| format!("finalize failed: {error}"))?;
     Ok(image)
+}
+
+/// Decodes input.jxl and hashes every rendered keyframe (FNV-1a over the f32 bit patterns of all channels).
+/// Needs no reference images, so two builds can be compared on every testcase.
+fn hash_case(directory: &Path, chunk: Option<usize>) -> CheckResult<String> {
+    let input: Arc<[u8]> = Arc::from(read(&directory.join("input.jxl"))?);
+    let mut image = match chunk {
+        None => JxlImage::builder()
+            .read_bytes(input)
+            .map_err(|error| format!("decode failed: {error}"))?,
+        Some(size) => streamed(&input, size)?,
+    };
+    image.set_cms(NullCms);
+    image.set_render_spot_color(false);
+    let frames = image.num_loaded_keyframes();
+    let mut hashes = Vec::with_capacity(frames);
+    for index in 0..frames {
+        let render = image
+            .render_frame(index)
+            .map_err(|error| format!("frame {index} render failed: {error}"))?;
+        let buffer = render.image_all_channels();
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        for sample in buffer.buf() {
+            for byte in sample.to_bits().to_le_bytes() {
+                hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+            }
+        }
+        hashes.push(format!("{}x{}x{}:{hash:016x}", buffer.width(), buffer.height(), buffer.channels()));
+    }
+    Ok(format!("frames={frames} {}", hashes.join(",")))
 }
 
 fn run_case(directory: &Path, chunk: Option<usize>, report: &mut Report) -> CheckResult<()> {
@@ -234,7 +272,7 @@ fn run_case(directory: &Path, chunk: Option<usize>, report: &mut Report) -> Chec
     let prepared: CheckResult<JxlImage> = (|| {
         let mut image = match chunk {
             None => JxlImage::builder()
-                .pool(JxlThreadPool::none())
+                .tasks(Tasks::inline())
                 .read_bytes(input)
                 .map_err(|error| format!("decode failed: {error}"))?,
             Some(size) => streamed(&input, size)?,
@@ -249,7 +287,7 @@ fn run_case(directory: &Path, chunk: Option<usize>, report: &mut Report) -> Chec
         Ok(image)
     })();
     report.milliseconds += start.elapsed().as_secs_f64() * 1000.0;
-    let image = prepared?;
+    let mut image = prepared?;
 
     let frames = image.num_loaded_keyframes();
     report.frames = Some(frames);
@@ -348,6 +386,13 @@ fn execute(args: &Arguments) -> CheckResult<bool> {
     let mut failed = 0usize;
     let mut skipped = 0usize;
     for (name, directory) in cases {
+        if args.hash {
+            match hash_case(&directory, args.chunk) {
+                Ok(line) => println!("HASH {name} {line}"),
+                Err(error) => println!("HASH {name} error={error}"),
+            }
+            continue;
+        }
         // A testcase whose reference objects were not fetched is skipped, not failed.
         if !std::fs::read_dir(&directory)
             .map(|entries| entries.flatten().any(|entry| entry.path().extension().is_some_and(|e| e == "npy")))
