@@ -19,7 +19,6 @@ pub struct LfGroupParams<'a, 'dest, 'tracker, S: Sample> {
     pub lf_group_idx: u32,
     pub allow_partial: bool,
     pub tracker: Option<&'tracker AllocTracker>,
-    pub pool: &'a jxl_threadpool::JxlThreadPool,
 }
 
 #[derive(Debug)]
@@ -40,7 +39,6 @@ impl<S: Sample> Bundle<LfGroupParams<'_, '_, '_, S>> for LfGroup<S> {
             lf_group_idx,
             allow_partial,
             tracker,
-            pool,
             ..
         } = params;
         let (lf_width, lf_height) = frame_header.lf_group_size_for(lf_group_idx);
@@ -57,7 +55,6 @@ impl<S: Sample> Bundle<LfGroupParams<'_, '_, '_, S>> for LfGroup<S> {
                 global_ma_config,
                 allow_partial,
                 tracker,
-                pool,
             };
             LfCoeff::parse(bitstream, lf_coeff_params)
         })
@@ -84,7 +81,7 @@ impl<S: Sample> Bundle<LfGroupParams<'_, '_, '_, S>> for LfGroup<S> {
                 1 + frame_header.num_lf_groups() + lf_group_idx,
                 allow_partial,
             )?;
-            is_mlf_complete = subimage.finish(pool);
+            is_mlf_complete = subimage.finish();
         }
 
         let hf_meta = (frame_header.encoding == Encoding::VarDct && is_mlf_complete)
@@ -105,7 +102,6 @@ impl<S: Sample> Bundle<LfGroupParams<'_, '_, '_, S>> for LfGroup<S> {
                     },
                     quantizer_global_scale: params.quantizer.unwrap().global_scale,
                     tracker,
-                    pool,
                 };
                 HfMetadata::parse(bitstream, hf_meta_params)
             })

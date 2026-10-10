@@ -6,7 +6,7 @@ use jxl_frame::{
 };
 use jxl_grid::AlignedGrid;
 use jxl_modular::{ChannelShift, Sample, image::TransformedModularSubimage};
-use jxl_threadpool::{JxlThreadPool, Tasks};
+use jxl_threadpool::Tasks;
 
 use crate::{
     Error, ImageWithRegion, IndexedFrame, Reference, Region, RenderCache, Result,
@@ -353,7 +353,7 @@ async fn render_inner<S: Sample>(
         }
     }
     if let Some(image) = gmodular.modular.image_mut() {
-        image.prepare_subimage()?.finish(&JxlThreadPool::none());
+        image.prepare_subimage()?.finish();
         fb.extend_from_gmodular(gmodular);
     }
     Ok(fb)
@@ -386,7 +386,6 @@ fn decode_group<S: Sample>(
         .channels
         .each_mut()
         .map(|grid| grid.as_subgrid_mut().into_i32());
-    let pool = JxlThreadPool::none();
     let result = jxl_frame::data::decode_pass_group(
         &mut bitstream,
         PassGroupParams {
@@ -403,7 +402,6 @@ fn decode_group<S: Sample>(
             }),
             allow_partial,
             tracker: frame.alloc_tracker(),
-            pool: &pool,
         },
     );
     if !allow_partial {

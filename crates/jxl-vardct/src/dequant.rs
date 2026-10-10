@@ -403,16 +403,15 @@ impl DequantMatrixParams {
 
 /// Parameters for decoding `DequantMatrixSet`.
 #[derive(Debug, Copy, Clone)]
-pub struct DequantMatrixSetParams<'a, 'pool, 'tracker> {
+pub struct DequantMatrixSetParams<'a, 'tracker> {
     dct_select: TransformType,
     bit_depth: u32,
     stream_index: u32,
     global_ma_config: Option<&'a jxl_modular::MaConfig>,
     tracker: Option<&'tracker AllocTracker>,
-    pool: &'pool jxl_threadpool::JxlThreadPool,
 }
 
-impl<'a, 'pool, 'tracker> DequantMatrixSetParams<'a, 'pool, 'tracker> {
+impl<'a, 'tracker> DequantMatrixSetParams<'a, 'tracker> {
     /// Create a new `DequantMatrixSetParams` with the given information.
     ///
     /// `num_lf_groups` is used to compute the stream index for Modular images.
@@ -421,7 +420,6 @@ impl<'a, 'pool, 'tracker> DequantMatrixSetParams<'a, 'pool, 'tracker> {
         num_lf_groups: u32,
         global_ma_config: Option<&'a jxl_modular::MaConfig>,
         tracker: Option<&'tracker AllocTracker>,
-        pool: &'pool jxl_threadpool::JxlThreadPool,
     ) -> Self {
         Self {
             dct_select: TransformType::Dct8,
@@ -429,12 +427,11 @@ impl<'a, 'pool, 'tracker> DequantMatrixSetParams<'a, 'pool, 'tracker> {
             stream_index: 1 + num_lf_groups * 3,
             global_ma_config,
             tracker,
-            pool,
         }
     }
 }
 
-impl Bundle<DequantMatrixSetParams<'_, '_, '_>> for DequantMatrixParams {
+impl Bundle<DequantMatrixSetParams<'_, '_>> for DequantMatrixParams {
     type Error = crate::Error;
 
     fn parse(bitstream: &mut Bitstream, params: DequantMatrixSetParams) -> Result<Self> {
@@ -477,7 +474,6 @@ impl Bundle<DequantMatrixSetParams<'_, '_, '_>> for DequantMatrixParams {
             stream_index,
             global_ma_config,
             tracker,
-            pool,
         } = params;
 
         let encoding_mode = bitstream.read_bits(3)?;
@@ -552,7 +548,7 @@ impl Bundle<DequantMatrixSetParams<'_, '_, '_>> for DequantMatrixParams {
                 let image = params.image_mut().unwrap();
                 let mut subimage = image.prepare_subimage()?;
                 subimage.decode(bitstream, stream_index, false)?;
-                subimage.finish(pool);
+                subimage.finish();
 
                 Raw {
                     denominator,
@@ -583,7 +579,7 @@ pub struct DequantMatrixSet {
     jpeg_matrices: Vec<Vec<i32>>,
 }
 
-impl Bundle<DequantMatrixSetParams<'_, '_, '_>> for DequantMatrixSet {
+impl Bundle<DequantMatrixSetParams<'_, '_>> for DequantMatrixSet {
     type Error = crate::Error;
 
     fn parse(bitstream: &mut Bitstream, params: DequantMatrixSetParams) -> Result<Self> {

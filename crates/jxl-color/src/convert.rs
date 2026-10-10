@@ -608,11 +608,7 @@ impl ColorTransform {
     }
 
     /// Runs the chunked transform inline for legacy synchronous callers.
-    pub fn run_with_threads(
-        &self,
-        channels: &mut [&mut [f32]],
-        _pool: &jxl_threadpool::JxlThreadPool,
-    ) -> Result<usize> {
+    pub fn run_with_threads(&self, channels: &mut [&mut [f32]]) -> Result<usize> {
         jxl_threadpool::poll_once(self.run_with_tasks(channels, &jxl_threadpool::Tasks::inline()))
             .map_err(|_| Error::NotReady)?
     }
@@ -639,19 +635,23 @@ impl ColorTransform {
             Vec::with_capacity(len.div_ceil(65536));
         for start in (0..len).step_by(65536) {
             let end = start.saturating_add(65536).min(len);
-            let mut chunk: Vec<Vec<f32>> =
-                channels.iter().map(|channel| channel[start..end].to_vec()).collect();
+            let mut chunk: Vec<Vec<f32>> = channels
+                .iter()
+                .map(|channel| channel[start..end].to_vec())
+                .collect();
             let transform = Arc::clone(&transform);
             jobs.push(Box::new(move || {
-                let mut views: Vec<&mut [f32]> =
-                    chunk.iter_mut().map(Vec::as_mut_slice).collect();
+                let mut views: Vec<&mut [f32]> = chunk.iter_mut().map(Vec::as_mut_slice).collect();
                 let output_channels = transform.run(&mut views)?;
                 drop(views);
                 Ok((chunk, output_channels))
             }));
         }
 
-        let results = tasks.run_all(jobs).await.map_err(|_| Error::TaskCancelled)?;
+        let results = tasks
+            .run_all(jobs)
+            .await
+            .map_err(|_| Error::TaskCancelled)?;
         let mut chunks = Vec::with_capacity(results.len());
         let mut output_channels = self.begin_channels;
         for result in results {

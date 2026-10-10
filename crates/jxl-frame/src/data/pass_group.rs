@@ -1,7 +1,6 @@
 use jxl_bitstream::Bitstream;
 use jxl_grid::{AllocTracker, MutableSubgrid};
 use jxl_modular::{ChannelShift, MaConfig, Sample, image::TransformedModularSubimage};
-use jxl_threadpool::JxlThreadPool;
 use jxl_vardct::{HfCoeffParams, write_hf_coeff};
 
 use super::{HfGlobal, LfGlobalVarDct, LfGroup};
@@ -18,7 +17,6 @@ pub struct PassGroupParams<'frame, 'buf, 'g, 'tracker, S: Sample> {
     pub vardct: Option<PassGroupParamsVardct<'frame, 'buf, 'g>>,
     pub allow_partial: bool,
     pub tracker: Option<&'tracker AllocTracker>,
-    pub pool: &'frame JxlThreadPool,
 }
 
 #[derive(Debug)]
@@ -42,7 +40,6 @@ pub fn decode_pass_group<S: Sample>(
         vardct,
         allow_partial,
         tracker,
-        pool,
     } = params;
 
     if let (
@@ -128,7 +125,6 @@ pub fn decode_pass_group<S: Sample>(
             modular,
             allow_partial,
             tracker,
-            pool,
         )?;
     }
 
@@ -145,7 +141,6 @@ pub fn decode_pass_group_modular<S: Sample>(
     modular: TransformedModularSubimage<S>,
     allow_partial: bool,
     tracker: Option<&AllocTracker>,
-    pool: &JxlThreadPool,
 ) -> Result<()> {
     if modular.is_empty() {
         return Ok(());
@@ -161,6 +156,6 @@ pub fn decode_pass_group_modular<S: Sample>(
             + group_idx,
         allow_partial,
     )?;
-    subimage.finish(pool);
+    subimage.finish();
     Ok(())
 }

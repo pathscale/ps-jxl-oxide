@@ -3,7 +3,6 @@ use jxl_grid::AllocTracker;
 use jxl_image::ImageMetadata;
 use jxl_modular::{MaConfig, Sample};
 use jxl_oxide_common::Bundle;
-use jxl_threadpool::JxlThreadPool;
 use jxl_vardct::{DequantMatrixSet, DequantMatrixSetParams, HfBlockContext, HfPass, HfPassParams};
 
 use super::LfGlobal;
@@ -16,7 +15,6 @@ pub struct HfGlobalParams<'a, 'b> {
     ma_config: Option<&'a MaConfig>,
     hf_block_ctx: &'a HfBlockContext,
     tracker: Option<&'b AllocTracker>,
-    pool: &'a JxlThreadPool,
 }
 
 impl<'a, 'b> HfGlobalParams<'a, 'b> {
@@ -25,7 +23,6 @@ impl<'a, 'b> HfGlobalParams<'a, 'b> {
         frame_header: &'a FrameHeader,
         lf_global: &'a LfGlobal<S>,
         tracker: Option<&'b AllocTracker>,
-        pool: &'a JxlThreadPool,
     ) -> Self {
         let Some(lf_vardct) = &lf_global.vardct else {
             panic!("VarDCT not initialized")
@@ -36,7 +33,6 @@ impl<'a, 'b> HfGlobalParams<'a, 'b> {
             ma_config: lf_global.gmodular.ma_config.as_ref(),
             hf_block_ctx: &lf_vardct.hf_block_ctx,
             tracker,
-            pool,
         }
     }
 }
@@ -58,14 +54,12 @@ impl Bundle<HfGlobalParams<'_, '_>> for HfGlobal {
             ma_config,
             hf_block_ctx,
             tracker,
-            pool,
         } = params;
         let dequant_matrix_params = DequantMatrixSetParams::new(
             metadata.bit_depth.bits_per_sample(),
             frame_header.num_lf_groups(),
             ma_config,
             tracker,
-            pool,
         );
         let dequant_matrices = DequantMatrixSet::parse(bitstream, dequant_matrix_params)?;
 

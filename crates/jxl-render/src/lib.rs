@@ -11,7 +11,6 @@ use jxl_grid::AllocTracker;
 use jxl_image::{ImageHeader, ImageMetadata};
 
 use jxl_oxide_common::Bundle;
-use jxl_threadpool::JxlThreadPool;
 
 mod blend;
 mod coordinator;
@@ -35,7 +34,6 @@ use state::*;
 /// Render context that tracks loaded and rendered frames.
 pub struct RenderContext {
     image_header: Arc<ImageHeader>,
-    pool: JxlThreadPool,
     tracker: Option<AllocTracker>,
     pub(crate) frames: Vec<Arc<IndexedFrame>>,
     pub(crate) renders_wide: Vec<Option<RenderCache<i32>>>,
@@ -74,7 +72,6 @@ impl RenderContext {
 #[derive(Debug, Default)]
 pub struct RenderContextBuilder {
     embedded_icc: Vec<u8>,
-    pool: Option<JxlThreadPool>,
     tracker: Option<AllocTracker>,
     force_wide_buffers: bool,
 }
@@ -82,11 +79,6 @@ pub struct RenderContextBuilder {
 impl RenderContextBuilder {
     pub fn embedded_icc(mut self, icc: Vec<u8>) -> Self {
         self.embedded_icc = icc;
-        self
-    }
-
-    pub fn pool(mut self, pool: JxlThreadPool) -> Self {
-        self.pool = Some(pool);
         self
     }
 
@@ -166,7 +158,6 @@ impl RenderContextBuilder {
         Ok(RenderContext {
             image_header,
             tracker: self.tracker,
-            pool: self.pool.unwrap_or_else(JxlThreadPool::none),
             frames: Vec::new(),
             renders_wide: Vec::new(),
             renders_narrow: Vec::new(),
@@ -367,7 +358,6 @@ impl RenderContext {
             FrameContext {
                 image_header: image_header.clone(),
                 tracker: self.tracker.as_ref(),
-                pool: self.pool.clone(),
             },
         ) {
             Ok(frame) => frame,

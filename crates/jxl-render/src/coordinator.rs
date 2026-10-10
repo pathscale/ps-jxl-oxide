@@ -121,7 +121,6 @@ impl RenderContext {
         let deps = self.frame_deps[index];
         let image_region = self.requested_image_region;
         let visibility = self.get_previous_frames_visibility(&frame);
-        let pool = self.pool.clone();
 
         let (mut image, references) = if self.narrow_modular() {
             let mut cache = self.renders_narrow[index]
@@ -136,7 +135,6 @@ impl RenderContext {
                 references.clone(),
                 &mut cache,
                 image_region,
-                pool.clone(),
                 visibility,
                 tasks,
             )
@@ -158,7 +156,6 @@ impl RenderContext {
                 references.clone(),
                 &mut cache,
                 image_region,
-                pool.clone(),
                 visibility,
                 tasks,
             )
@@ -168,11 +165,11 @@ impl RenderContext {
             }
             (result?, references)
         };
-        if !image::composite_preprocess(&frame, &mut image, &pool, tasks).await? {
+        if !image::composite_preprocess(&frame, &mut image, tasks).await? {
             let region = oriented_region.unwrap_or_else(|| {
                 util::apply_orientation_to_image_region(&self.image_header, image_region)
             });
-            image::composite(&frame, &mut image, references.refs, region, &pool)?;
+            image::composite(&frame, &mut image, references.refs, region)?;
             self.release_overwritten_reference(&frame, deps);
         }
         let image = Arc::new(image);
@@ -276,7 +273,6 @@ impl RenderContext {
             ref_slots: self.reference,
         };
         let visibility = self.get_previous_frames_visibility(&frame);
-        let pool = self.pool.clone();
         let (mut image, references) = if self.narrow_modular() {
             let mut cache = self
                 .loading_render_cache_narrow
@@ -291,7 +287,6 @@ impl RenderContext {
                 references.clone(),
                 &mut cache,
                 image_region,
-                pool.clone(),
                 visibility,
                 tasks,
             )
@@ -314,7 +309,6 @@ impl RenderContext {
                 references.clone(),
                 &mut cache,
                 image_region,
-                pool.clone(),
                 visibility,
                 tasks,
             )
@@ -324,9 +318,9 @@ impl RenderContext {
             }
             (result?, references)
         };
-        if !image::composite_preprocess(&frame, &mut image, &pool, tasks).await? {
+        if !image::composite_preprocess(&frame, &mut image, tasks).await? {
             let region = util::apply_orientation_to_image_region(&self.image_header, image_region);
-            image::composite(&frame, &mut image, references.refs, region, &pool)?;
+            image::composite(&frame, &mut image, references.refs, region)?;
         }
         if header.lf_level > 0 {
             let mut image = image.upsample_lf(header.lf_level)?;

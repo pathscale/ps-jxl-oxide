@@ -70,7 +70,7 @@ impl<Ctx> Bundle<Ctx> for HfBlockContext {
             (
                 15,
                 vec![
-                    0, 1, 2, 2, 3, 3, 4, 5, 6, 6, 6, 6, 6, 7, 8, 9, 9, 10, 11, 12, 13, 14, 14, 14,
+                    0, 1, 2, 2, 3, 3, 4, 5, 6, 6, 6, 7, 8, 9, 9, 10, 11, 12, 13, 14, 14, 14, 14,
                     14, 14, 7, 8, 9, 9, 10, 11, 12, 13, 14, 14, 14, 14, 14,
                 ],
             )
@@ -115,7 +115,7 @@ impl<Ctx> Bundle<Ctx> for HfBlockContext {
 
 /// Paramters for decoding `LfCoeff`.
 #[derive(Debug)]
-pub struct LfCoeffParams<'ma, 'pool, 'tracker> {
+pub struct LfCoeffParams<'ma, 'tracker> {
     pub lf_group_idx: u32,
     pub lf_width: u32,
     pub lf_height: u32,
@@ -124,7 +124,6 @@ pub struct LfCoeffParams<'ma, 'pool, 'tracker> {
     pub global_ma_config: Option<&'ma MaConfig>,
     pub allow_partial: bool,
     pub tracker: Option<&'tracker AllocTracker>,
-    pub pool: &'pool jxl_threadpool::JxlThreadPool,
 }
 
 /// Quantized LF image.
@@ -135,7 +134,7 @@ pub struct LfCoeff<S: Sample> {
     pub partial: bool,
 }
 
-impl<S: Sample> Bundle<LfCoeffParams<'_, '_, '_>> for LfCoeff<S> {
+impl<S: Sample> Bundle<LfCoeffParams<'_, '_>> for LfCoeff<S> {
     type Error = crate::Error;
 
     fn parse(bitstream: &mut Bitstream, params: LfCoeffParams) -> Result<Self> {
@@ -148,7 +147,6 @@ impl<S: Sample> Bundle<LfCoeffParams<'_, '_, '_>> for LfCoeff<S> {
             global_ma_config,
             allow_partial,
             tracker,
-            pool,
         } = params;
 
         let extra_precision = bitstream.read_bits(2)? as u8;
@@ -172,7 +170,7 @@ impl<S: Sample> Bundle<LfCoeffParams<'_, '_, '_>> for LfCoeff<S> {
         let image = lf_quant.image_mut().unwrap();
         let mut subimage = image.prepare_subimage()?;
         subimage.decode(bitstream, 1 + lf_group_idx, allow_partial)?;
-        let complete = subimage.finish(pool);
+        let complete = subimage.finish();
         Ok(Self {
             extra_precision,
             lf_quant,

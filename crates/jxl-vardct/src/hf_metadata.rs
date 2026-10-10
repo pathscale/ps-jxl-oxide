@@ -7,7 +7,7 @@ use crate::{Result, TransformType};
 
 /// Parameters for decoding `HfMetadata`.
 #[derive(Debug)]
-pub struct HfMetadataParams<'ma, 'pool, 'tracker> {
+pub struct HfMetadataParams<'ma, 'tracker> {
     pub num_lf_groups: u32,
     pub lf_group_idx: u32,
     pub lf_width: u32,
@@ -18,7 +18,6 @@ pub struct HfMetadataParams<'ma, 'pool, 'tracker> {
     pub epf: Option<(f32, [f32; 8])>,
     pub quantizer_global_scale: u32,
     pub tracker: Option<&'tracker AllocTracker>,
-    pub pool: &'pool jxl_threadpool::JxlThreadPool,
 }
 
 /// Data for decoding and rendering varblocks within an LF group.
@@ -49,7 +48,7 @@ pub enum BlockInfo {
     },
 }
 
-impl Bundle<HfMetadataParams<'_, '_, '_>> for HfMetadata {
+impl Bundle<HfMetadataParams<'_, '_>> for HfMetadata {
     type Error = crate::Error;
 
     fn parse(bitstream: &mut Bitstream, params: HfMetadataParams) -> Result<Self> {
@@ -64,7 +63,6 @@ impl Bundle<HfMetadataParams<'_, '_, '_>> for HfMetadata {
             epf,
             quantizer_global_scale,
             tracker,
-            pool,
         } = params;
 
         let mut bw = lf_width.div_ceil(8) as usize;
@@ -94,7 +92,7 @@ impl Bundle<HfMetadataParams<'_, '_, '_>> for HfMetadata {
         let image = modular.image_mut().unwrap();
         let mut subimage = image.prepare_subimage()?;
         subimage.decode(bitstream, 1 + 2 * num_lf_groups + lf_group_idx, false)?;
-        subimage.finish(pool);
+        subimage.finish();
 
         let image = modular.into_image().unwrap().into_image_channels();
         let mut image_iter = image.into_iter();

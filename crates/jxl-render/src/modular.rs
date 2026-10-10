@@ -78,12 +78,10 @@ fn group_section(frame: &IndexedFrame, kind: TocGroupKind) -> Option<(Section, b
     Some((section, partial))
 }
 
-/// The unused compatibility argument keeps existing render callers source-compatible.
-pub(crate) async fn render_modular<S: Sample, P: ?Sized>(
+pub(crate) async fn render_modular<S: Sample>(
     frame: &IndexedFrame,
     cache: &mut RenderCache<S>,
     region: Region,
-    _pool: &P,
     tasks: &Tasks,
 ) -> Result<ImageWithRegion> {
     let image_header = frame.image_header();

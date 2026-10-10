@@ -6,8 +6,6 @@ use jxl_frame::{
 use jxl_grid::{AlignedGrid, MutableSubgrid, SharedSubgrid};
 use jxl_image::ImageHeader;
 
-use jxl_threadpool::JxlThreadPool;
-
 use crate::{ImageWithRegion, Reference, Region, Result, image::ImageBuffer};
 
 #[derive(Debug)]
@@ -180,7 +178,6 @@ pub(crate) fn blend(
     new_frame: &Frame,
     new_grid: &mut ImageWithRegion,
     output_frame_region: Region,
-    _pool: &JxlThreadPool,
 ) -> Result<ImageWithRegion> {
     let header = new_frame.header();
     let tracker = new_frame.alloc_tracker();

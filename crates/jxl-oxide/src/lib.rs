@@ -138,9 +138,9 @@ pub use jxl_frame::{Frame, FrameHeader};
 pub use jxl_grid::{AlignedGrid, AllocTracker};
 pub use jxl_image::color::{self, EnumColourEncoding, RenderingIntent};
 pub use jxl_image::{self as image, ExtraChannelType, ImageHeader};
-pub use jxl_threadpool::{Cancelled, Job, JobFuture, JxlThreadPool, TaskExecutor, Tasks};
 #[cfg(feature = "nagoya")]
 pub use jxl_threadpool::NagoyaExecutor;
+pub use jxl_threadpool::{Cancelled, Job, JobFuture, TaskExecutor, Tasks};
 
 mod aux_box;
 mod fb;
@@ -148,7 +148,6 @@ pub use aux_box::{AuxBoxData, AuxBoxList, RawExif};
 pub use fb::{FrameBuffer, FrameBufferSample, ImageStream};
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
-
 
 /// JPEG XL image decoder builder.
 #[derive(Debug, Default)]
@@ -163,12 +162,6 @@ impl JxlImageBuilder {
     pub fn tasks(mut self, tasks: Tasks) -> Self {
         self.tasks = Some(tasks);
         self
-    }
-
-    /// Selects inline tasks through the legacy dispatch API.
-    #[deprecated(note = "use tasks(Tasks::inline())")]
-    pub fn pool(self, _pool: JxlThreadPool) -> Self {
-        self.tasks(Tasks::inline())
     }
 
     /// Sets an allocation tracker.
@@ -186,7 +179,6 @@ impl JxlImageBuilder {
     /// Consumes the builder, and creates an empty, uninitialized JPEG XL image decoder.
     pub fn build_uninit(self) -> UninitializedJxlImage {
         UninitializedJxlImage {
-            pool: JxlThreadPool::none(),
             tasks: self.tasks.unwrap_or_else(Tasks::inline),
             tracker: self.tracker,
             reader: ContainerParser::new(),
@@ -215,13 +207,13 @@ impl JxlImageBuilder {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::UnexpectedEof,
                     "input ended before parsing image header",
-                ).into());
+                )
+                .into());
             }
         };
         image.finalize()?;
         Ok(image)
     }
-
 }
 
 /// Empty, uninitialized JPEG XL image.
@@ -249,7 +241,6 @@ impl JxlImageBuilder {
 /// # }
 /// ```
 pub struct UninitializedJxlImage {
-    pool: JxlThreadPool,
     tasks: Tasks,
     tracker: Option<AllocTracker>,
     reader: ContainerParser,
@@ -358,7 +349,6 @@ impl UninitializedJxlImage {
                 FrameContext {
                     image_header: image_header.clone(),
                     tracker: self.tracker.as_ref(),
-                    pool: self.pool.clone(),
                 },
             ) {
                 Ok(x) => x,
@@ -372,8 +362,12 @@ impl UninitializedJxlImage {
 
             let bytes_read = bitstream.num_read_bits() / 8;
             let x = frame.toc().total_byte_size();
-            let preview_end = bytes_read.checked_add(x)
-                .ok_or(jxl_bitstream::Error::ValidationFailed("preview extent overflow"))?;
+            let preview_end =
+                bytes_read
+                    .checked_add(x)
+                    .ok_or(jxl_bitstream::Error::ValidationFailed(
+                        "preview extent overflow",
+                    ))?;
             if self.buffer.len() < preview_end {
                 return Ok(self.need_more());
             }
@@ -383,13 +377,16 @@ impl UninitializedJxlImage {
             0usize
         };
 
-        let bytes_read = (bitstream.num_read_bits() / 8).checked_add(skip_bytes)
-            .ok_or(jxl_bitstream::Error::ValidationFailed("image header extent overflow"))?;
+        let bytes_read = (bitstream.num_read_bits() / 8)
+            .checked_add(skip_bytes)
+            .ok_or(jxl_bitstream::Error::ValidationFailed(
+                "image header extent overflow",
+            ))?;
         let header_data = self.buffer.section(0..header_end)?;
 
         let render_spot_color = !image_header.metadata.grayscale();
 
-        let mut builder = RenderContext::builder().pool(self.pool.clone());
+        let mut builder = RenderContext::builder();
         if let Some(icc) = embedded_icc {
             builder = builder.embedded_icc(icc);
         }
@@ -400,7 +397,6 @@ impl UninitializedJxlImage {
         let ctx = builder.build(image_header.clone())?;
 
         let mut image = JxlImage {
-            pool: self.pool.clone(),
             tasks: self.tasks.clone(),
             reader: self.reader,
             image_header,
@@ -432,7 +428,6 @@ pub enum InitializeResult {
 /// JPEG XL image.
 #[derive(Debug)]
 pub struct JxlImage {
-    pool: JxlThreadPool,
     tasks: Tasks,
     reader: ContainerParser,
     image_header: Arc<ImageHeader>,
@@ -453,7 +448,6 @@ impl JxlImage {
     pub fn read_with_defaults(reader: impl std::io::Read) -> Result<JxlImage> {
         Self::builder().read(reader)
     }
-
 
     /// Appends an immutable chunk. Incomplete input is retained automatically.
     pub fn feed(&mut self, buf: Arc<[u8]>) -> Result<()> {
@@ -488,7 +482,8 @@ impl JxlImage {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
                 "input ended before loading all image frames",
-            ).into());
+            )
+            .into());
         }
         self.inner.aux_boxes.eof()?;
         Ok(())
@@ -659,12 +654,6 @@ impl JxlImage {
         &self.tasks
     }
 
-    /// Returns the legacy inline dispatch wrapper.
-    #[inline]
-    pub fn pool(&self) -> &JxlThreadPool {
-        &self.pool
-    }
-
     /// Returns the internal reader.
     pub fn reader(&self) -> &ContainerParser {
         &self.reader
@@ -716,7 +705,10 @@ impl JxlImage {
 
     /// Renders the given keyframe in the current cropping region with the caller's executor.
     pub async fn render_frame_cropped_async(&mut self, keyframe_index: usize) -> Result<Render> {
-        let image = self.ctx.render_keyframe(keyframe_index, self.tasks.clone()).await?;
+        let image = self
+            .ctx
+            .render_keyframe(keyframe_index, self.tasks.clone())
+            .await?;
 
         let image_region = self
             .ctx
@@ -807,7 +799,6 @@ impl JxlImage {
     }
 }
 
-
 /// # Private methods
 impl JxlImage {
     fn convert_ec_info(&self) -> Vec<ExtraChannel> {
@@ -850,17 +841,27 @@ impl JxlImageInner {
                 let frame_index = frame.index();
                 assert_eq!(self.frame_offsets.len(), frame_index);
                 self.frame_offsets.push(self.buffer_offset);
-                self.buffer_offset = self.buffer_offset
+                self.buffer_offset = self
+                    .buffer_offset
                     .checked_add(bitstream.num_read_bits() / 8)
                     .filter(|offset| *offset <= self.buffer.len())
-                    .ok_or(jxl_bitstream::Error::ValidationFailed("frame header extent overflow"))?;
+                    .ok_or(jxl_bitstream::Error::ValidationFailed(
+                        "frame header extent overflow",
+                    ))?;
             }
-            let frame = ctx.current_loading_frame()
-                .ok_or(jxl_bitstream::Error::ValidationFailed("missing loading frame"))?;
+            let frame =
+                ctx.current_loading_frame()
+                    .ok_or(jxl_bitstream::Error::ValidationFailed(
+                        "missing loading frame",
+                    ))?;
             let count = frame.feed_spans(&self.buffer, self.buffer_offset..self.buffer.len())?;
-            self.buffer_offset = self.buffer_offset.checked_add(count)
+            self.buffer_offset = self
+                .buffer_offset
+                .checked_add(count)
                 .filter(|offset| *offset <= self.buffer.len())
-                .ok_or(jxl_bitstream::Error::ValidationFailed("frame data extent overflow"))?;
+                .ok_or(jxl_bitstream::Error::ValidationFailed(
+                    "frame data extent overflow",
+                ))?;
             if !frame.is_loading_done() {
                 return Ok(());
             }
@@ -1158,5 +1159,3 @@ impl From<jxl_render::Region> for CropInfo {
         }
     }
 }
-
-

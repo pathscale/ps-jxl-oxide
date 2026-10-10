@@ -445,7 +445,7 @@ impl<'dest, S: Sample> TransformedModularSubimage<'dest, S> {
     }
 
     /// Synchronous compatibility path for parser-owned kernels.
-    pub fn finish<P: ?Sized>(mut self, _pool: &P) -> bool {
+    pub fn finish(mut self) -> bool {
         for tr in self.header.transform.iter().rev() {
             tr.inverse(&mut self.grid, self.bit_depth);
         }

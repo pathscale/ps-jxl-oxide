@@ -5,7 +5,7 @@ use jxl_frame::{
 use std::sync::Arc;
 
 use jxl_modular::Sample;
-use jxl_threadpool::{JxlThreadPool, Tasks};
+use jxl_threadpool::Tasks;
 
 use crate::{
     Error, ImageWithRegion, IndexedFrame, Reference, ReferenceFrames, Region, Result, blend,
@@ -17,7 +17,6 @@ pub(crate) async fn render_frame<S: Sample>(
     reference_frames: ReferenceFrames,
     cache: &mut RenderCache<S>,
     image_region: Region,
-    pool: JxlThreadPool,
     frame_visibility: (usize, usize),
     tasks: &Tasks,
 ) -> Result<ImageWithRegion> {
@@ -47,7 +46,7 @@ pub(crate) async fn render_frame<S: Sample>(
 
     let mut fb = match frame_header.encoding {
         Encoding::Modular => {
-            modular::render_modular(frame, cache, color_padded_region, &pool, tasks).await?
+            modular::render_modular(frame, cache, color_padded_region, tasks).await?
         }
         Encoding::VarDct => {
             let result = vardct::render_vardct(
@@ -55,7 +54,6 @@ pub(crate) async fn render_frame<S: Sample>(
                 reference_frames.lf.as_ref(),
                 cache,
                 color_padded_region,
-                &pool,
                 tasks,
             )
             .await;

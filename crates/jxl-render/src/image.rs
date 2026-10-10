@@ -2,7 +2,6 @@ use jxl_frame::{FrameHeader, data::GlobalModular};
 use jxl_grid::{AlignedGrid, AllocTracker};
 use jxl_image::{BitDepth, ImageHeader};
 use jxl_modular::{ChannelShift, Sample};
-use jxl_threadpool::JxlThreadPool;
 use jxl_vardct::LfChannelDequantization;
 
 use crate::{IndexedFrame, Region, Result, util};
@@ -672,7 +671,6 @@ impl ImageWithRegion {
 pub(crate) async fn composite_preprocess(
     frame: &IndexedFrame,
     grid: &mut ImageWithRegion,
-    _pool: &JxlThreadPool,
     tasks: &jxl_threadpool::Tasks,
 ) -> Result<bool> {
     let image_header = frame.image_header();
@@ -705,7 +703,6 @@ pub(crate) fn composite(
     grid: &mut ImageWithRegion,
     refs: [Option<crate::Reference>; 4],
     oriented_image_region: Region,
-    pool: &JxlThreadPool,
 ) -> Result<()> {
     let image_header = frame.image_header();
     let frame_header = frame.header();
@@ -724,7 +721,7 @@ pub(crate) fn composite(
         frame_region
     };
 
-    let image = crate::blend::blend(image_header, refs, frame, grid, frame_region, pool)?;
+    let image = crate::blend::blend(image_header, refs, frame, grid, frame_region)?;
     *grid = image;
     Ok(())
 }

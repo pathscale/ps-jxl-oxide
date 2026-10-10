@@ -33,7 +33,6 @@ pub use error::{Error, Result};
 pub use header::FrameHeader;
 use jxl_modular::Sample;
 use jxl_modular::{MaConfig, image::TransformedModularSubimage};
-use jxl_threadpool::JxlThreadPool;
 
 use crate::data::*;
 
@@ -42,7 +41,6 @@ use crate::data::*;
 /// A frame represents a single unit of image that can be displayed or referenced by other frames.
 #[derive(Debug)]
 pub struct Frame {
-    pool: JxlThreadPool,
     tracker: Option<AllocTracker>,
     image_header: Arc<ImageHeader>,
     header: FrameHeader,
@@ -82,7 +80,6 @@ impl From<TocGroup> for GroupData {
 pub struct FrameContext<'a> {
     pub image_header: Arc<ImageHeader>,
     pub tracker: Option<&'a AllocTracker>,
-    pub pool: JxlThreadPool,
 }
 
 impl Bundle<FrameContext<'_>> for Frame {
@@ -92,7 +89,6 @@ impl Bundle<FrameContext<'_>> for Frame {
         let FrameContext {
             image_header,
             tracker,
-            pool,
         } = ctx;
         let tracker = tracker.cloned();
 
@@ -208,7 +204,6 @@ impl Bundle<FrameContext<'_>> for Frame {
         pass_shifts.insert(header.passes.num_passes - 1, (0i32, maxshift));
 
         Ok(Self {
-            pool,
             tracker,
             image_header,
             header,
@@ -414,7 +409,6 @@ impl Frame {
                     lf_group_idx,
                     allow_partial: !loaded,
                     tracker: self.tracker.as_ref(),
-                    pool: &self.pool,
                 },
             );
 
@@ -447,7 +441,6 @@ impl Frame {
                     lf_group_idx,
                     allow_partial,
                     tracker: self.tracker.as_ref(),
-                    pool: &self.pool,
                 },
             );
             if allow_partial && result.is_err() {
@@ -540,7 +533,6 @@ impl Frame {
                     &self.header,
                     lf_global,
                     self.tracker.as_ref(),
-                    &self.pool,
                 ),
             );
 
@@ -581,7 +573,6 @@ impl Frame {
                 &self.header,
                 lf_global,
                 self.tracker.as_ref(),
-                &self.pool,
             );
             Some(HfGlobal::parse(&mut bitstream, params))
         }

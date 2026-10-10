@@ -333,5 +333,3 @@ impl AuxBoxList {
         self.first_of_type(ContainerBoxType::XML)
     }
 }
-
-

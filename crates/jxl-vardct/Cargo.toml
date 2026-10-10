@@ -33,7 +33,3 @@ path = "../jxl-modular"
 [dependencies.jxl-oxide-common]
 version = "1.0.0"
 path = "../jxl-oxide-common"
-
-[dependencies.jxl-threadpool]
-version = "1.0.0"
-path = "../jxl-threadpool"

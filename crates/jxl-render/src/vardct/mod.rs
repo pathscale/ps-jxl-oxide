@@ -9,7 +9,6 @@ use jxl_frame::{
 use jxl_grid::{AlignedGrid, MutableSubgrid, SharedSubgrid};
 use jxl_image::ImageHeader;
 use jxl_modular::{ChannelShift, Sample};
-use jxl_threadpool::JxlThreadPool;
 use jxl_vardct::{
     BlockInfo, LfChannelCorrelation, LfChannelDequantization, Quantizer, TransformType,
 };
@@ -48,7 +47,6 @@ pub(crate) async fn render_vardct<S: Sample>(
     lf_frame: Option<&Reference>,
     cache: &mut RenderCache<S>,
     region: Region,
-    _pool: &JxlThreadPool,
     tasks: &jxl_threadpool::Tasks,
 ) -> Result<ImageWithRegion> {
     owned::render(frame, lf_frame, cache, region, tasks).await
@@ -153,6 +151,7 @@ pub fn dequant_hf_varblock_grouped<S: Sample>(
     };
 
     let block_info = &hf_meta.block_info;
+
     let lf_width = (block_info.width() - left_in_lf).min(group_dim as usize / 8);
     let lf_height = (block_info.height() - top_in_lf).min(group_dim as usize / 8);
     let block_info = hf_meta.block_info.as_subgrid().subgrid(
@@ -255,7 +254,7 @@ pub fn chroma_from_luma_hf_grouped(
         let b_from_y = b_from_y.get_row(y / 64);
 
         let coeff_x = coeff_x.get_row_mut(y);
-        let coeff_y = coeff_y.get_row_mut(y);
+        let coeff_y = coeff_y.get_row(y);
         let coeff_b = coeff_b.get_row_mut(y);
 
         for (x64, (&kx, &kb)) in x_from_y.iter().zip(b_from_y).enumerate() {

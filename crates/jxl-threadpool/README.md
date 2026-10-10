@@ -1,4 +1,4 @@
 # jxl-threadpool
-This crate preserves the task-dispatch interface used by other jxl-oxide crates. All closures run
-inline, and the wrapper has no multithreading capability or pool dependencies.
+This crate provides owned task dispatch for jxl-oxide. Callers supply an executor through `Tasks`,
+with an inline executor for synchronous use and an optional adapter for existing Nagoya workers.
 
