@@ -1,5 +1,5 @@
 use jxl_frame::{FrameHeader, data::GlobalModular};
-use jxl_grid::{AlignedGrid, AllocTracker, MutableSubgrid};
+use jxl_grid::{AlignedGrid, AllocTracker};
 use jxl_image::{BitDepth, ImageHeader};
 use jxl_modular::{ChannelShift, Sample};
 use jxl_threadpool::JxlThreadPool;
@@ -647,44 +647,6 @@ impl ImageWithRegion {
         let b = b.as_float_mut().unwrap();
         let c = c.as_float_mut().unwrap();
         [a, b, c]
-    }
-
-    pub(crate) fn color_groups_with_group_id(
-        &mut self,
-        frame_header: &jxl_frame::FrameHeader,
-    ) -> Vec<(u32, [MutableSubgrid<'_, f32>; 3])> {
-        assert_eq!(self.color_channels, 3);
-        let [fb_x, fb_y, fb_b, ..] = &mut *self.buffer else {
-            panic!();
-        };
-
-        let group_dim = frame_header.group_dim();
-        let base_group_x = self.regions[0].0.left as u32 / group_dim;
-        let base_group_y = self.regions[0].0.top as u32 / group_dim;
-        let width = self.regions[0].0.width;
-        let frame_groups_per_row = frame_header.groups_per_row();
-        let groups_per_row = width.div_ceil(group_dim);
-
-        let [fb_x, fb_y, fb_b] = [(0usize, fb_x), (1, fb_y), (2, fb_b)].map(|(idx, fb)| {
-            let fb = fb.as_float_mut().unwrap().as_subgrid_mut();
-            let hshift = self.regions[idx].1.hshift();
-            let vshift = self.regions[idx].1.vshift();
-            let group_dim = group_dim as usize;
-            fb.into_groups(group_dim >> hshift, group_dim >> vshift)
-        });
-
-        fb_x.into_iter()
-            .zip(fb_y)
-            .zip(fb_b)
-            .enumerate()
-            .map(|(idx, ((fb_x, fb_y), fb_b))| {
-                let idx = idx as u32;
-                let group_x = base_group_x + (idx % groups_per_row);
-                let group_y = base_group_y + (idx / groups_per_row);
-                let group_idx = group_y * frame_groups_per_row + group_x;
-                (group_idx, [fb_x, fb_y, fb_b])
-            })
-            .collect()
     }
 }
 

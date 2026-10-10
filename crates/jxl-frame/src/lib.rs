@@ -18,7 +18,6 @@
 //! [`num_passes`]: header::Passes::num_passes
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use jxl_bitstream::{Bitstream, Section, Spans};
 use jxl_grid::AllocTracker;
@@ -50,17 +49,18 @@ pub struct Frame {
     toc: Toc,
     header_data: Option<Section>,
     data: Vec<GroupData>,
-    all_group_offsets: AllGroupOffsets,
     reading_data_index: usize,
     pass_shifts: BTreeMap<u32, (i32, i32)>,
 }
 
-#[derive(Debug, Default)]
-struct AllGroupOffsets {
-    lf_group: AtomicUsize,
-    hf_global: AtomicUsize,
-    pass_group: AtomicUsize,
-    has_error: AtomicUsize,
+/// Single-entry section indexing owned by one parser or render coordinator.
+/// Keep this state with the same frame and input generation.
+#[derive(Debug, Default, Clone)]
+pub struct FrameParser {
+    lf_group: usize,
+    hf_global: usize,
+    pass_group: usize,
+    has_error: usize,
 }
 
 #[derive(Debug)]
@@ -215,7 +215,6 @@ impl Bundle<FrameContext<'_>> for Frame {
             toc,
             header_data,
             data,
-            all_group_offsets: AllGroupOffsets::default(),
             reading_data_index: 0,
             pass_shifts,
         })
@@ -267,16 +266,21 @@ impl Frame {
     /// Retains available ranges and returns the number of logical bytes consumed.
     pub fn feed_spans(&mut self, source: &Spans, range: std::ops::Range<usize>) -> Result<usize> {
         if range.start > range.end || range.end > source.len() {
-            return Err(jxl_bitstream::Error::ValidationFailed("frame input range out of bounds").into());
+            return Err(
+                jxl_bitstream::Error::ValidationFailed("frame input range out of bounds").into(),
+            );
         }
         let mut position = range.start;
         while let Some(group_data) = self.data.get_mut(self.reading_data_index) {
             let size = usize::try_from(group_data.toc_group.size)
                 .map_err(|_| jxl_bitstream::Error::ValidationFailed("group size overflow"))?;
-            let bytes_left = size.checked_sub(group_data.bytes.len())
-                .ok_or(jxl_bitstream::Error::ValidationFailed("group data exceeds TOC size"))?;
+            let bytes_left = size.checked_sub(group_data.bytes.len()).ok_or(
+                jxl_bitstream::Error::ValidationFailed("group data exceeds TOC size"),
+            )?;
             let count = bytes_left.min(range.end - position);
-            group_data.bytes.append_from(source, position..position + count)?;
+            group_data
+                .bytes
+                .append_from(source, position..position + count)?;
             position += count;
             if count < bytes_left {
                 break;
@@ -299,8 +303,15 @@ impl Frame {
 
 impl Frame {
     pub fn try_parse_lf_global<S: Sample>(&self) -> Option<Result<LfGlobal<S>>> {
+        self.try_parse_lf_global_with_parser(&mut FrameParser::default())
+    }
+
+    pub fn try_parse_lf_global_with_parser<S: Sample>(
+        &self,
+        parser: &mut FrameParser,
+    ) -> Option<Result<LfGlobal<S>>> {
         Some(if self.toc.is_single_entry() {
-            if self.all_group_offsets.has_error.load(Ordering::Relaxed) != 0 {
+            if parser.has_error != 0 {
                 return Some(Err(Error::HadError));
             }
 
@@ -318,14 +329,12 @@ impl Frame {
             );
             match lf_global {
                 Ok(lf_global) => {
-                    self.all_group_offsets
-                        .lf_group
-                        .store(bitstream.num_read_bits(), Ordering::Relaxed);
+                    parser.lf_group = bitstream.num_read_bits();
                     Ok(lf_global)
                 }
                 Err(e) if !loaded && e.unexpected_eof() => Err(e),
                 Err(e) => {
-                    self.all_group_offsets.has_error.store(1, Ordering::Relaxed);
+                    parser.has_error = 1;
                     Err(e)
                 }
             }
@@ -354,8 +363,25 @@ impl Frame {
         mlf_group: Option<TransformedModularSubimage<S>>,
         lf_group_idx: u32,
     ) -> Option<Result<LfGroup<S>>> {
+        self.try_parse_lf_group_with_parser(
+            lf_global_vardct,
+            global_ma_config,
+            mlf_group,
+            lf_group_idx,
+            &mut FrameParser::default(),
+        )
+    }
+
+    pub fn try_parse_lf_group_with_parser<S: Sample>(
+        &self,
+        lf_global_vardct: Option<&LfGlobalVarDct>,
+        global_ma_config: Option<&MaConfig>,
+        mlf_group: Option<TransformedModularSubimage<S>>,
+        lf_group_idx: u32,
+        parser: &mut FrameParser,
+    ) -> Option<Result<LfGroup<S>>> {
         if self.toc.is_single_entry() {
-            if self.all_group_offsets.has_error.load(Ordering::Relaxed) != 0 {
+            if parser.has_error != 0 {
                 return Some(Err(Error::HadError));
             }
 
@@ -366,14 +392,14 @@ impl Frame {
             let group = self.data.first()?;
             let loaded = self.reading_data_index != 0;
             let mut bitstream = Bitstream::from_section(&group.bytes);
-            let offset = self.all_group_offsets.lf_group.load(Ordering::Relaxed);
+            let offset = parser.lf_group;
             if offset == 0 {
-                let lf_global = self.try_parse_lf_global::<S>().unwrap();
+                let lf_global = self.try_parse_lf_global_with_parser::<S>(parser).unwrap();
                 if let Err(e) = lf_global {
                     return Some(Err(e));
                 }
             }
-            let offset = self.all_group_offsets.lf_group.load(Ordering::Relaxed);
+            let offset = parser.lf_group;
             if let Err(error) = bitstream.skip_bits(offset) {
                 return Some(Err(error.into()));
             }
@@ -394,14 +420,12 @@ impl Frame {
 
             match result {
                 Ok(result) => {
-                    self.all_group_offsets
-                        .hf_global
-                        .store(bitstream.num_read_bits(), Ordering::Relaxed);
+                    parser.hf_global = bitstream.num_read_bits();
                     Some(Ok(result))
                 }
                 Err(e) if !loaded && e.unexpected_eof() => None,
                 Err(e) => {
-                    self.all_group_offsets.has_error.store(2, Ordering::Relaxed);
+                    parser.has_error = 2;
                     Some(Err(e))
                 }
             }
@@ -437,19 +461,27 @@ impl Frame {
         &self,
         cached_lf_global: Option<&LfGlobal<S>>,
     ) -> Option<Result<HfGlobal>> {
+        self.try_parse_hf_global_with_parser(cached_lf_global, &mut FrameParser::default())
+    }
+
+    pub fn try_parse_hf_global_with_parser<S: Sample>(
+        &self,
+        cached_lf_global: Option<&LfGlobal<S>>,
+        parser: &mut FrameParser,
+    ) -> Option<Result<HfGlobal>> {
         let is_modular = self.header.encoding == header::Encoding::Modular;
 
         if self.toc.is_single_entry() {
-            if self.all_group_offsets.has_error.load(Ordering::Relaxed) != 0 {
+            if parser.has_error != 0 {
                 return Some(Err(Error::HadError));
             }
 
             let group = self.data.first()?;
             let loaded = self.reading_data_index != 0;
             let mut bitstream = Bitstream::from_section(&group.bytes);
-            let offset = self.all_group_offsets.hf_global.load(Ordering::Relaxed);
+            let offset = parser.hf_global;
             let lf_global = if cached_lf_global.is_none() && (offset == 0 || !is_modular) {
-                match self.try_parse_lf_global()? {
+                match self.try_parse_lf_global_with_parser(parser)? {
                     Ok(lf_global) => Some(lf_global),
                     Err(e) => return Some(Err(e)),
                 }
@@ -475,11 +507,12 @@ impl Frame {
                 };
                 let mlf_group = groups.and_then(|mut x| x.lf_groups.pop());
                 let lf_group = self
-                    .try_parse_lf_group(
+                    .try_parse_lf_group_with_parser(
                         lf_global.vardct.as_ref(),
                         lf_global.gmodular.ma_config(),
                         mlf_group,
                         0,
+                        parser,
                     )
                     .ok_or(
                         jxl_bitstream::Error::Io(std::io::ErrorKind::UnexpectedEof.into()).into(),
@@ -489,12 +522,10 @@ impl Frame {
                     return Some(Err(e));
                 }
             }
-            let offset = self.all_group_offsets.hf_global.load(Ordering::Relaxed);
+            let offset = parser.hf_global;
 
             if self.header.encoding == header::Encoding::Modular {
-                self.all_group_offsets
-                    .pass_group
-                    .store(offset, Ordering::Relaxed);
+                parser.pass_group = offset;
                 return None;
             }
 
@@ -515,14 +546,12 @@ impl Frame {
 
             Some(match result {
                 Ok(result) => {
-                    self.all_group_offsets
-                        .pass_group
-                        .store(bitstream.num_read_bits(), Ordering::Relaxed);
+                    parser.pass_group = bitstream.num_read_bits();
                     Ok(result)
                 }
                 Err(e) if !loaded && e.unexpected_eof() => Err(e),
                 Err(e) => {
-                    self.all_group_offsets.has_error.store(3, Ordering::Relaxed);
+                    parser.has_error = 3;
                     Err(e)
                 }
             })
@@ -539,7 +568,7 @@ impl Frame {
 
             let mut bitstream = Bitstream::from_section(&group.bytes);
             let lf_global = if cached_lf_global.is_none() {
-                match self.try_parse_lf_global()? {
+                match self.try_parse_lf_global_with_parser(parser)? {
                     Ok(lf_global) => Some(lf_global),
                     Err(e) => return Some(Err(e)),
                 }
@@ -563,8 +592,17 @@ impl Frame {
         pass_idx: u32,
         group_idx: u32,
     ) -> Option<Result<PassGroupBitstream<'_>>> {
+        self.pass_group_bitstream_with_parser(pass_idx, group_idx, &mut FrameParser::default())
+    }
+
+    pub fn pass_group_bitstream_with_parser(
+        &self,
+        pass_idx: u32,
+        group_idx: u32,
+        parser: &mut FrameParser,
+    ) -> Option<Result<PassGroupBitstream<'_>>> {
         Some(if self.toc.is_single_entry() {
-            if self.all_group_offsets.has_error.load(Ordering::Relaxed) != 0 {
+            if parser.has_error != 0 {
                 return Some(Err(Error::HadError));
             }
 
@@ -575,13 +613,15 @@ impl Frame {
             let group = self.data.first()?;
             let loaded = self.reading_data_index != 0;
             let mut bitstream = Bitstream::from_section(&group.bytes);
-            let mut offset = self.all_group_offsets.pass_group.load(Ordering::Relaxed);
+            let mut offset = parser.pass_group;
             if offset == 0 {
-                let hf_global = self.try_parse_hf_global::<i32>(None)?;
-                if let Err(e) = hf_global {
+                if let Some(Err(e)) = self.try_parse_hf_global_with_parser::<i32>(None, parser) {
                     return Some(Err(e));
                 }
-                offset = self.all_group_offsets.pass_group.load(Ordering::Relaxed);
+                offset = parser.pass_group;
+                if offset == 0 {
+                    return None;
+                }
             }
             if let Err(error) = bitstream.skip_bits(offset) {
                 return Some(Err(error.into()));

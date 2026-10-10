@@ -19,10 +19,10 @@ The study's 21 dispatch statements include four jxl-jbr sites already deleted in
 | Removed | crates/jxl-render/src/lib.rs:603 | Loading wide path uses the same awaited reference coordinator, without detached work. |
 | Converted | crates/jxl-render/src/modular.rs:38 | LF nodes return LF metadata and Modular contributions; retain serial single-entry parsing order. |
 | Converted | crates/jxl-render/src/modular.rs:94 | Immutable MA/channel descriptions; return owned recursive Modular output per pass/group. |
-| Pending | crates/jxl-render/src/util.rs:230 | Return owned LF group, Modular contribution and optional dequantized LF tile. |
-| Pending | crates/jxl-render/src/vardct/mod.rs:156 | Arc LF/frame descriptions; return immutable HF-global snapshot after section indexing permits it. |
-| Pending | crates/jxl-render/src/vardct/mod.rs:284 | Arc LF/HF/MA metadata; pass the owned coefficient group through ordered passes and return its Modular contribution. |
-| Pending | crates/jxl-render/src/vardct/mod.rs:320 | Reuse the owned coefficient group allocation for reconstruction; Arc LF/HF inputs; return completed pixels. |
+| Converted | crates/jxl-render/src/util.rs:230 | Return owned LF group, Modular contribution and optional dequantized LF tile. |
+| Converted | crates/jxl-render/src/vardct/mod.rs:156 | Arc LF/frame descriptions; return immutable HF-global snapshot after section indexing permits it. |
+| Converted | crates/jxl-render/src/vardct/mod.rs:284 | Arc LF/HF/MA metadata; pass the owned coefficient group through ordered passes and return its Modular contribution. |
+| Converted | crates/jxl-render/src/vardct/mod.rs:320 | Reuse the owned coefficient group allocation for reconstruction; Arc LF/HF inputs; return completed pixels. |
 | Deleted | crates/jxl-jbr/src/reconstruct.rs:140 | JPEG reconstruction removed in stage 1; no retained job. |
 | Deleted | crates/jxl-jbr/src/reconstruct.rs:166 | JPEG reconstruction removed in stage 1; no retained job. |
 | Deleted | crates/jxl-jbr/src/reconstruct.rs:253 | JPEG reconstruction removed in stage 1; no retained job. |

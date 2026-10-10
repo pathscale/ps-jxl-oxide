@@ -1,19 +1,22 @@
+use std::sync::Arc;
+
 use jxl_color::{
     ColorEncodingWithProfile, ColorTransform, ColourEncoding, ColourSpace, EnumColourEncoding,
 };
 use jxl_frame::{
-    Frame, FrameHeader,
-    data::{LfGlobal, LfGroup},
+    Frame, FrameHeader, FrameParser,
+    data::{GlobalModular, LfGlobal, LfGroup},
     filter::{EdgePreservingFilter, EpfParams},
     header::FrameType,
 };
 use jxl_grid::{AlignedGrid, MutableSubgrid};
 use jxl_image::ImageHeader;
 use jxl_modular::{ChannelShift, Sample, image::TransformedModularSubimage};
-use jxl_threadpool::JxlThreadPool;
+use jxl_threadpool::Tasks;
 
 use crate::{
-    ImageWithRegion, IndexedFrame, Region, Result, image::ImageBuffer, vardct::copy_lf_dequant,
+    Error, ImageWithRegion, IndexedFrame, Region, Result, image::ImageBuffer,
+    vardct::copy_lf_dequant,
 };
 
 pub(crate) fn image_region_to_frame(
@@ -119,13 +122,162 @@ pub(crate) fn pad_color_region(
     color_padded_region
 }
 
-pub(crate) fn load_lf_groups<S: Sample>(
+pub(crate) async fn load_lf_groups<S: Sample>(
+    frame: &Arc<IndexedFrame>,
+    lf_global: &Arc<LfGlobal<S>>,
+    lf_groups: &mut std::collections::HashMap<u32, LfGroup<S>>,
+    mut gmodular: GlobalModular<S>,
+    lf_region: Region,
+    parser: &mut FrameParser,
+    tasks: &Tasks,
+) -> Result<(Option<ImageWithRegion>, GlobalModular<S>)> {
+    if gmodular.modular.image().is_none() && !frame.toc().is_single_entry() {
+        let image =
+            load_independent_lf_groups(frame, lf_global, lf_groups, lf_region, tasks).await?;
+        return Ok((image, gmodular));
+    }
+    let frame = Arc::clone(frame);
+    let lf_global = Arc::clone(lf_global);
+    let mut groups = std::mem::take(lf_groups);
+    let mut task_parser = parser.clone();
+    // The current Modular layout has merged borrowed leaders and members. Keep its
+    // allocation in one owner until the owned Modular layout can split this batch.
+    let job = Box::new(move || {
+        let result = (|| {
+            let mlf_groups = gmodular
+                .modular
+                .image_mut()
+                .map(|image| image.prepare_groups(frame.pass_shifts()))
+                .transpose()?
+                .map(|groups| groups.lf_groups)
+                .unwrap_or_default();
+            load_lf_groups_inner(
+                &frame,
+                &lf_global,
+                &mut groups,
+                mlf_groups,
+                lf_region,
+                &mut task_parser,
+            )
+        })();
+        (result, gmodular, groups, task_parser)
+    });
+    let jobs: Vec<Box<dyn FnOnce() -> _ + Send + 'static>> = vec![job];
+    let mut outputs = tasks
+        .run_all(jobs)
+        .await
+        .map_err(|_| Error::Color(jxl_color::Error::TaskCancelled))?;
+    let (result, gmodular, groups, task_parser) = outputs.pop().unwrap();
+    *lf_groups = groups;
+    *parser = task_parser;
+    Ok((result?, gmodular))
+}
+
+async fn load_independent_lf_groups<S: Sample>(
+    frame: &Arc<IndexedFrame>,
+    lf_global: &Arc<LfGlobal<S>>,
+    lf_groups: &mut std::collections::HashMap<u32, LfGroup<S>>,
+    lf_region: Region,
+    tasks: &Tasks,
+) -> Result<Option<ImageWithRegion>> {
+    let header = frame.header();
+    let group_dim = header.group_dim();
+    let mut jobs: Vec<Box<dyn FnOnce() -> _ + Send + 'static>> = Vec::new();
+    for index in 0..header.num_lf_groups() {
+        let tile_region = Region {
+            left: ((index % header.lf_groups_per_row()) * group_dim) as i32,
+            top: ((index / header.lf_groups_per_row()) * group_dim) as i32,
+            width: group_dim,
+            height: group_dim,
+        }
+        .intersection(lf_region);
+        if tile_region.is_empty() {
+            continue;
+        }
+        let frame = Arc::clone(frame);
+        let lf_global = Arc::clone(lf_global);
+        let mut groups = std::collections::HashMap::new();
+        if let Some(group) = lf_groups.remove(&index) {
+            groups.insert(index, group);
+        }
+        jobs.push(Box::new(move || {
+            let result = load_lf_groups_inner(
+                &frame,
+                &lf_global,
+                &mut groups,
+                Vec::new(),
+                tile_region,
+                &mut FrameParser::default(),
+            );
+            (result, groups)
+        }));
+    }
+    let outputs = tasks
+        .run_all(jobs)
+        .await
+        .map_err(|_| Error::Color(jxl_color::Error::TaskCancelled))?;
+    let mut first_error = None;
+    let mut tiles = Vec::new();
+    for (result, groups) in outputs {
+        lf_groups.extend(groups);
+        match result {
+            Ok(Some(image)) => tiles.push(image),
+            Ok(None) => {}
+            Err(error) => {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+    }
+    if let Some(error) = first_error {
+        return Err(error);
+    }
+    if lf_global.vardct.is_none() || header.flags.use_lf_frame() {
+        return Ok(None);
+    }
+    let shifts: [_; 3] = std::array::from_fn(|index| {
+        ChannelShift::from_jpeg_upsampling(header.jpeg_upsampling, index)
+    });
+    let mut image = ImageWithRegion::new(3, frame.alloc_tracker());
+    for shift in shifts {
+        let (width, height) = shift.shift_size((lf_region.width, lf_region.height));
+        image.append_channel_shifted(
+            ImageBuffer::F32(AlignedGrid::with_alloc_tracker(
+                width as usize,
+                height as usize,
+                frame.alloc_tracker(),
+            )?),
+            lf_region,
+            shift,
+        );
+    }
+    for tile in tiles {
+        let region = tile.regions_and_shifts()[0].0;
+        for ((output, input), shift) in image
+            .as_color_floats_mut()
+            .into_iter()
+            .zip(tile.as_color_floats())
+            .zip(shifts)
+        {
+            let left = ((region.left - lf_region.left) as u32 >> shift.hshift()) as usize;
+            let top = ((region.top - lf_region.top) as u32 >> shift.vshift()) as usize;
+            for y in 0..input.height() {
+                output.get_row_mut(top + y)[left..left + input.width()]
+                    .copy_from_slice(input.get_row(y));
+            }
+        }
+    }
+    Ok(Some(image))
+}
+
+fn load_lf_groups_inner<S: Sample>(
     frame: &IndexedFrame,
     lf_global: &LfGlobal<S>,
     lf_groups: &mut std::collections::HashMap<u32, LfGroup<S>>,
     mlf_groups: Vec<TransformedModularSubimage<S>>,
     lf_region: Region,
-    pool: &JxlThreadPool,
+    parser: &mut FrameParser,
 ) -> Result<Option<ImageWithRegion>> {
     #[derive(Default)]
     struct LfGroupJob<'modular, 'xyb, S: Sample> {
@@ -226,85 +378,95 @@ pub(crate) fn load_lf_groups<S: Sample>(
         })
         .collect::<Vec<_>>();
 
-    let result = std::sync::RwLock::new(Result::Ok(()));
-    pool.for_each_mut_slice(&mut lf_groups_out, |job| {
-        let LfGroupJob {
-            idx,
-            ref mut lf_group,
-            ref mut modular,
-            ref mut lf_xyb,
-        } = *job;
-        let loaded = lf_group.as_ref().map(|g| !g.partial).unwrap_or(false);
+    let mut result = Ok(());
+    for job in &mut lf_groups_out {
+        let job_result = (|| -> Result<()> {
+            let LfGroupJob {
+                idx,
+                ref mut lf_group,
+                ref mut modular,
+                ref mut lf_xyb,
+            } = *job;
+            let loaded = lf_group.as_ref().map(|g| !g.partial).unwrap_or(false);
 
-        if !loaded {
-            let parse_result =
-                frame.try_parse_lf_group(lf_global_vardct, global_ma_config, modular.take(), idx);
-            match parse_result {
-                Some(Ok(g)) => {
-                    *lf_group = Some(g);
-                }
-                Some(Err(e)) => {
-                    *result.write().unwrap() = Err(e.into());
-                    return;
-                }
-                None => {
-                    return;
+            if !loaded {
+                let parse_result = frame.try_parse_lf_group_with_parser(
+                    lf_global_vardct,
+                    global_ma_config,
+                    modular.take(),
+                    idx,
+                    parser,
+                );
+                match parse_result {
+                    Some(Ok(g)) => {
+                        *lf_group = Some(g);
+                    }
+                    Some(Err(e)) => {
+                        return Err(e.into());
+                    }
+                    None => {
+                        return Ok(());
+                    }
                 }
             }
-        }
 
-        let lf_group = lf_group.as_ref().unwrap();
-        if let (false, Some(lf_xyb)) = (has_lf_frame, lf_xyb) {
-            let [lf_x, lf_y, lf_b] = lf_xyb;
-            let lf_global_vardct = lf_global_vardct.unwrap();
+            let lf_group = lf_group.as_ref().unwrap();
+            if let (false, Some(lf_xyb)) = (has_lf_frame, lf_xyb) {
+                let [lf_x, lf_y, lf_b] = lf_xyb;
+                let lf_global_vardct = lf_global_vardct.unwrap();
 
-            let lf_group_x = idx % lf_groups_per_row;
-            let lf_group_y = idx / lf_groups_per_row;
-            let left = lf_group_x * frame_header.group_dim();
-            let top = lf_group_y * frame_header.group_dim();
-            let lf_group_region = Region {
-                left: left as i32,
-                top: top as i32,
-                width: group_dim,
-                height: group_dim,
-            };
-            if lf_region.intersection(lf_group_region).is_empty() {
-                return;
+                let lf_group_x = idx % lf_groups_per_row;
+                let lf_group_y = idx / lf_groups_per_row;
+                let left = lf_group_x * frame_header.group_dim();
+                let top = lf_group_y * frame_header.group_dim();
+                let lf_group_region = Region {
+                    left: left as i32,
+                    top: top as i32,
+                    width: group_dim,
+                    height: group_dim,
+                };
+                if lf_region.intersection(lf_group_region).is_empty() {
+                    return Ok(());
+                }
+
+                let quantizer = &lf_global_vardct.quantizer;
+                let lf_coeff = lf_group.lf_coeff.as_ref().unwrap();
+                let channel_data = lf_coeff.lf_quant.image().unwrap().image_channels();
+                copy_lf_dequant(
+                    lf_x,
+                    quantizer,
+                    lf_global.lf_dequant.m_x_lf,
+                    &channel_data[1],
+                    lf_coeff.extra_precision,
+                );
+                copy_lf_dequant(
+                    lf_y,
+                    quantizer,
+                    lf_global.lf_dequant.m_y_lf,
+                    &channel_data[0],
+                    lf_coeff.extra_precision,
+                );
+                copy_lf_dequant(
+                    lf_b,
+                    quantizer,
+                    lf_global.lf_dequant.m_b_lf,
+                    &channel_data[2],
+                    lf_coeff.extra_precision,
+                );
             }
-
-            let quantizer = &lf_global_vardct.quantizer;
-            let lf_coeff = lf_group.lf_coeff.as_ref().unwrap();
-            let channel_data = lf_coeff.lf_quant.image().unwrap().image_channels();
-            copy_lf_dequant(
-                lf_x,
-                quantizer,
-                lf_global.lf_dequant.m_x_lf,
-                &channel_data[1],
-                lf_coeff.extra_precision,
-            );
-            copy_lf_dequant(
-                lf_y,
-                quantizer,
-                lf_global.lf_dequant.m_y_lf,
-                &channel_data[0],
-                lf_coeff.extra_precision,
-            );
-            copy_lf_dequant(
-                lf_b,
-                quantizer,
-                lf_global.lf_dequant.m_b_lf,
-                &channel_data[2],
-                lf_coeff.extra_precision,
-            );
+            Ok(())
+        })();
+        if result.is_ok() && job_result.is_err() {
+            result = job_result;
         }
-    });
+    }
 
     for LfGroupJob { idx, lf_group, .. } in lf_groups_out.into_iter() {
         if let Some(group) = lf_group {
             lf_groups.insert(idx, group);
         }
     }
-    result.into_inner().unwrap()?;
+    result?;
     Ok(lf_xyb)
 }
 

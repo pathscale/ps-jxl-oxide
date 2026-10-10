@@ -51,7 +51,7 @@ impl Bundle<HfPassParams<'_>> for HfPass {
                     let skip = size / 64;
                     for permutation in permutation {
                         let perm = jxl_coding::read_permutation(bitstream, decoder, size, skip)?;
-                        let nat = natural_order_lazy(idx);
+                        let nat = natural_order(idx);
                         for idx in perm {
                             permutation.push(nat[idx]);
                         }
@@ -85,7 +85,7 @@ impl HfPass {
     pub(crate) fn order(&self, order_id: usize, channel: usize) -> &[(u16, u16)] {
         let permutation = &self.permutation[order_id][channel];
         if permutation.is_empty() {
-            natural_order_lazy(order_id)
+            natural_order(order_id)
         } else {
             permutation
         }
@@ -108,7 +108,8 @@ const BLOCK_SIZES: [(usize, usize); 13] = [
     (256, 128),
 ];
 
-const NATURAL_ORDER: [&[(u16, u16)]; 9] = [
+#[allow(long_running_const_eval)]
+const NATURAL_ORDER: [&[(u16, u16)]; 13] = [
     &const_compute_natural_order::<{ BLOCK_SIZES[0].0 * BLOCK_SIZES[0].1 }>(BLOCK_SIZES[0]),
     &const_compute_natural_order::<{ BLOCK_SIZES[1].0 * BLOCK_SIZES[1].1 }>(BLOCK_SIZES[1]),
     &const_compute_natural_order::<{ BLOCK_SIZES[2].0 * BLOCK_SIZES[2].1 }>(BLOCK_SIZES[2]),
@@ -118,39 +119,16 @@ const NATURAL_ORDER: [&[(u16, u16)]; 9] = [
     &const_compute_natural_order::<{ BLOCK_SIZES[6].0 * BLOCK_SIZES[6].1 }>(BLOCK_SIZES[6]),
     &const_compute_natural_order::<{ BLOCK_SIZES[7].0 * BLOCK_SIZES[7].1 }>(BLOCK_SIZES[7]),
     &const_compute_natural_order::<{ BLOCK_SIZES[8].0 * BLOCK_SIZES[8].1 }>(BLOCK_SIZES[8]),
+    &const_compute_natural_order::<{ BLOCK_SIZES[9].0 * BLOCK_SIZES[9].1 }>(BLOCK_SIZES[9]),
+    &const_compute_natural_order::<{ BLOCK_SIZES[10].0 * BLOCK_SIZES[10].1 }>(BLOCK_SIZES[10]),
+    &const_compute_natural_order::<{ BLOCK_SIZES[11].0 * BLOCK_SIZES[11].1 }>(BLOCK_SIZES[11]),
+    &const_compute_natural_order::<{ BLOCK_SIZES[12].0 * BLOCK_SIZES[12].1 }>(BLOCK_SIZES[12]),
 ];
 
 pub const DCT8_NATURAL_ORDER: &[(u16, u16)] = NATURAL_ORDER[0];
 
-fn natural_order_lazy(idx: usize) -> &'static [(u16, u16)] {
-    if idx >= 13 {
-        panic!("Order ID out of bounds");
-    }
-    let block_size = BLOCK_SIZES[idx];
-    let Some(idx) = idx.checked_sub(NATURAL_ORDER.len()) else {
-        return NATURAL_ORDER[idx];
-    };
-
-    static INITIALIZER: [std::sync::Once; 4] = [
-        std::sync::Once::new(),
-        std::sync::Once::new(),
-        std::sync::Once::new(),
-        std::sync::Once::new(),
-    ];
-    static mut LARGE_NATURAL_ORDER: [Vec<(u16, u16)>; 4] =
-        [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
-
-    // TODO: Replace this with `OnceLock` when it is available in stable.
-    INITIALIZER[idx].call_once(|| {
-        // SAFETY: this is the only thread accessing LARGE_NATURAL_ORDER[idx],
-        // as we're in call_once
-        let natural_order = unsafe { &mut LARGE_NATURAL_ORDER[idx] };
-        natural_order.resize(block_size.0 * block_size.1, (0, 0));
-        fill_natural_order(block_size, natural_order);
-    });
-    // SAFETY: none of the threads will have mutable access to LARGE_NATURAL_ORDER[idx],
-    // as we used call_once
-    unsafe { &LARGE_NATURAL_ORDER[idx] }
+fn natural_order(idx: usize) -> &'static [(u16, u16)] {
+    NATURAL_ORDER[idx]
 }
 
 const fn const_compute_natural_order<const N: usize>((bw, bh): (usize, usize)) -> [(u16, u16); N] {
@@ -193,39 +171,4 @@ const fn const_compute_natural_order<const N: usize>((bw, bh): (usize, usize)) -
     }
 
     ret
-}
-
-fn fill_natural_order((bw, bh): (usize, usize), output: &mut [(u16, u16)]) {
-    let y_scale = bw / bh;
-
-    let mut idx = 0usize;
-    let lbw = bw / 8;
-    let lbh = bh / 8;
-
-    while idx < lbw * lbh {
-        let x = idx % lbw;
-        let y = idx / lbw;
-        output[idx] = (x as u16, y as u16);
-        idx += 1;
-    }
-
-    for dist in 1..(2 * bw) {
-        let margin = dist.saturating_sub(bw);
-        for order in margin..(dist - margin) {
-            let (x, y) = if dist % 2 == 1 {
-                (order, dist - 1 - order)
-            } else {
-                (dist - 1 - order, order)
-            };
-
-            if x < lbw && y < lbw {
-                continue;
-            }
-            if y % y_scale != 0 {
-                continue;
-            }
-            output[idx] = (x as u16, (y / y_scale) as u16);
-            idx += 1;
-        }
-    }
 }

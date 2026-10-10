@@ -2,6 +2,8 @@ use jxl_frame::{
     filter::{EdgePreservingFilter, Gabor},
     header::Encoding,
 };
+use std::sync::Arc;
+
 use jxl_modular::Sample;
 use jxl_threadpool::{JxlThreadPool, Tasks};
 
@@ -11,7 +13,7 @@ use crate::{
 };
 
 pub(crate) async fn render_frame<S: Sample>(
-    frame: &IndexedFrame,
+    frame: &Arc<IndexedFrame>,
     reference_frames: ReferenceFrames,
     cache: &mut RenderCache<S>,
     image_region: Region,
