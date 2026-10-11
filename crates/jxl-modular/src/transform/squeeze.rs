@@ -818,32 +818,68 @@ fn inverse_v_i16(merged: &mut MutableSubgrid<i16>) {
     inverse_v_i16_base(merged)
 }
 
+// 64 columns fills full cache lines on both sample widths (256 bytes of i32,
+// 128 bytes of i16) and keeps one pass's scratch at height*64 samples, about
+// 512 KiB for a 2048-row i32 channel, so the second read of the block comes
+// from L2. A wider block thrashes that scratch on tall channels; a narrower
+// one spends more passes re-entering each image row. `stride = min(width, 64)`
+// so a narrow grid, including the SIMD remainder, allocates only the columns
+// it has. The tail pass is the leftover `width % 64` columns.
+const INVERSE_V_BLOCK: usize = 64;
+
 fn inverse_v_i32_base(merged: &mut MutableSubgrid<'_, i32>) {
     let width = merged.width();
     let height = merged.height();
-    let mut scratch = vec![0i32; height];
+    if width == 0 || height == 0 {
+        return;
+    }
+
+    let stride = width.min(INVERSE_V_BLOCK);
+    let mut scratch = vec![0i32; height * stride];
     let avg_height = height.div_ceil(2);
-    for x in 0..width {
-        for (y, v) in scratch.iter_mut().enumerate() {
-            *v = merged.get(x, y);
+    let mut avg = [0i32; INVERSE_V_BLOCK];
+    let mut top = [0i32; INVERSE_V_BLOCK];
+    let mut firsts = [0i32; INVERSE_V_BLOCK];
+    let mut seconds = [0i32; INVERSE_V_BLOCK];
+
+    for x0 in (0..width).step_by(stride) {
+        let b = (width - x0).min(stride);
+        for y in 0..height {
+            let row = &merged.get_row(y)[x0..x0 + b];
+            scratch[y * stride..y * stride + b].copy_from_slice(row);
         }
 
-        let (avg_col, residu_col) = scratch.split_at_mut(avg_height);
-        let mut avg = avg_col[0];
-        let mut top = avg;
-        for (y, &residu) in residu_col.iter().enumerate() {
-            let next_avg = avg_col.get(y + 1).copied().unwrap_or(avg);
-            let diff = residu.wrapping_add(tendency_i32(top, avg, next_avg));
-            let first = avg.wrapping_add(diff / 2);
-            let second = first.wrapping_sub(diff);
-            *merged.get_mut(x, 2 * y) = first;
-            *merged.get_mut(x, 2 * y + 1) = second;
-            avg = next_avg;
-            top = second;
+        avg[..b].copy_from_slice(&scratch[..b]);
+        top[..b].copy_from_slice(&avg[..b]);
+
+        for y in 0..height / 2 {
+            let residu_off = (avg_height + y) * stride;
+            let residu_row = &scratch[residu_off..residu_off + b];
+            let next_off = (y + 1) * stride;
+            let next_row = if y + 1 < avg_height {
+                &scratch[next_off..next_off + b]
+            } else {
+                &[]
+            };
+            for dx in 0..b {
+                let residu = residu_row[dx];
+                let next_avg = next_row.get(dx).copied().unwrap_or(avg[dx]);
+                let diff = residu.wrapping_add(tendency_i32(top[dx], avg[dx], next_avg));
+                let first = avg[dx].wrapping_add(diff / 2);
+                let second = first.wrapping_sub(diff);
+                firsts[dx] = first;
+                seconds[dx] = second;
+                avg[dx] = next_avg;
+                top[dx] = second;
+            }
+            merged.get_row_mut(2 * y)[x0..x0 + b].copy_from_slice(&firsts[..b]);
+            merged.get_row_mut(2 * y + 1)[x0..x0 + b].copy_from_slice(&seconds[..b]);
         }
 
         if height % 2 == 1 {
-            *merged.get_mut(x, height - 1) = avg_col[avg_height - 1];
+            let last = (avg_height - 1) * stride;
+            merged.get_row_mut(height - 1)[x0..x0 + b]
+                .copy_from_slice(&scratch[last..last + b]);
         }
     }
 }
@@ -852,29 +888,56 @@ fn inverse_v_i32_base(merged: &mut MutableSubgrid<'_, i32>) {
 fn inverse_v_i16_base(merged: &mut MutableSubgrid<'_, i16>) {
     let width = merged.width();
     let height = merged.height();
-    let mut scratch = vec![0i16; height];
+    if width == 0 || height == 0 {
+        return;
+    }
+
+    let stride = width.min(INVERSE_V_BLOCK);
+    let mut scratch = vec![0i16; height * stride];
     let avg_height = height.div_ceil(2);
-    for x in 0..width {
-        for (y, v) in scratch.iter_mut().enumerate() {
-            *v = merged.get(x, y);
+    let mut avg = [0i16; INVERSE_V_BLOCK];
+    let mut top = [0i16; INVERSE_V_BLOCK];
+    let mut firsts = [0i16; INVERSE_V_BLOCK];
+    let mut seconds = [0i16; INVERSE_V_BLOCK];
+
+    for x0 in (0..width).step_by(stride) {
+        let b = (width - x0).min(stride);
+        for y in 0..height {
+            let row = &merged.get_row(y)[x0..x0 + b];
+            scratch[y * stride..y * stride + b].copy_from_slice(row);
         }
 
-        let (avg_col, residu_col) = scratch.split_at_mut(avg_height);
-        let mut avg = avg_col[0];
-        let mut top = avg;
-        for (y, &residu) in residu_col.iter().enumerate() {
-            let next_avg = avg_col.get(y + 1).copied().unwrap_or(avg);
-            let diff = residu.wrapping_add(tendency_i16(top, avg, next_avg));
-            let first = avg.wrapping_add(diff / 2);
-            let second = first.wrapping_sub(diff);
-            *merged.get_mut(x, 2 * y) = first;
-            *merged.get_mut(x, 2 * y + 1) = second;
-            avg = next_avg;
-            top = second;
+        avg[..b].copy_from_slice(&scratch[..b]);
+        top[..b].copy_from_slice(&avg[..b]);
+
+        for y in 0..height / 2 {
+            let residu_off = (avg_height + y) * stride;
+            let residu_row = &scratch[residu_off..residu_off + b];
+            let next_off = (y + 1) * stride;
+            let next_row = if y + 1 < avg_height {
+                &scratch[next_off..next_off + b]
+            } else {
+                &[]
+            };
+            for dx in 0..b {
+                let residu = residu_row[dx];
+                let next_avg = next_row.get(dx).copied().unwrap_or(avg[dx]);
+                let diff = residu.wrapping_add(tendency_i16(top[dx], avg[dx], next_avg));
+                let first = avg[dx].wrapping_add(diff / 2);
+                let second = first.wrapping_sub(diff);
+                firsts[dx] = first;
+                seconds[dx] = second;
+                avg[dx] = next_avg;
+                top[dx] = second;
+            }
+            merged.get_row_mut(2 * y)[x0..x0 + b].copy_from_slice(&firsts[..b]);
+            merged.get_row_mut(2 * y + 1)[x0..x0 + b].copy_from_slice(&seconds[..b]);
         }
 
         if height % 2 == 1 {
-            *merged.get_mut(x, height - 1) = avg_col[avg_height - 1];
+            let last = (avg_height - 1) * stride;
+            merged.get_row_mut(height - 1)[x0..x0 + b]
+                .copy_from_slice(&scratch[last..last + b]);
         }
     }
 }
