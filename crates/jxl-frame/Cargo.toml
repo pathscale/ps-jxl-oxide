@@ -20,43 +20,43 @@ libm = { version = "0.2", default-features = false, optional = true }
 
 [dependencies.jxl-bitstream]
 package = "ps-jxl-bitstream"
-version = "0.13.0"
+version = "0.13.1"
 path = "../jxl-bitstream"
 default-features = false
 
 [dependencies.jxl-coding]
 package = "ps-jxl-coding"
-version = "0.13.0"
+version = "0.13.1"
 path = "../jxl-coding"
 default-features = false
 
 [dependencies.jxl-grid]
 package = "ps-jxl-grid"
-version = "0.13.0"
+version = "0.13.1"
 path = "../jxl-grid"
 default-features = false
 
 [dependencies.jxl-image]
 package = "ps-jxl-image"
-version = "0.13.0"
+version = "0.13.1"
 path = "../jxl-image"
 default-features = false
 
 [dependencies.jxl-modular]
 package = "ps-jxl-modular"
-version = "0.13.0"
+version = "0.13.1"
 path = "../jxl-modular"
 default-features = false
 
 [dependencies.jxl-oxide-common]
 package = "ps-jxl-oxide-common"
-version = "0.13.0"
+version = "0.13.1"
 path = "../jxl-oxide-common"
 default-features = false
 
 [dependencies.jxl-vardct]
 package = "ps-jxl-vardct"
-version = "0.13.0"
+version = "0.13.1"
 path = "../jxl-vardct"
 default-features = false
 
