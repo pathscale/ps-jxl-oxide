@@ -42,8 +42,13 @@ where
         return Ok(());
     }
 
-    let kernel = Arc::new(kernel);
     let extent = if horizontal { height } else { width };
+    if tasks.is_inline() || extent <= STRIPE {
+        kernel(grids);
+        return Ok(());
+    }
+
+    let kernel = Arc::new(kernel);
     let mut start = 0;
     while start < extent {
         let mut jobs: Vec<Box<dyn FnOnce() -> Stripe<S> + Send + 'static>> =
