@@ -630,6 +630,24 @@ impl ColorTransform {
             return Ok(self.begin_channels);
         }
 
+        // Only IccToIcc can fail, so without it in-place chunks match the deferred merge.
+        let infallible = !self
+            .ops
+            .iter()
+            .any(|op| matches!(op, ColorTransformOp::IccToIcc(_)));
+        if tasks.is_inline() && infallible {
+            let mut output_channels = self.begin_channels;
+            for start in (0..len).step_by(65536) {
+                let end = start.saturating_add(65536).min(len);
+                let mut views: Vec<&mut [f32]> = channels
+                    .iter_mut()
+                    .map(|channel| &mut channel[start..end])
+                    .collect();
+                output_channels = self.run(&mut views)?;
+            }
+            return Ok(output_channels);
+        }
+
         let transform = Arc::new(self.clone());
         let mut jobs: Vec<Box<dyn FnOnce() -> Result<(Vec<Vec<f32>>, usize)> + Send + 'static>> =
             Vec::with_capacity(len.div_ceil(65536));
