@@ -19,7 +19,7 @@ tracing = { version = "0.1.40", default-features = false }
 
 [dependencies.jxl-bitstream]
 package = "ps-jxl-bitstream"
-version = "0.13.1"
+version = "0.13.2"
 path = "../jxl-bitstream"
 default-features = false
 
