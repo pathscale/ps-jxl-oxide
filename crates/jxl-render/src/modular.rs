@@ -67,6 +67,64 @@ fn decode_group<S: Sample>(
     }
 }
 
+fn decode_group_inplace<S: Sample>(
+    modular: Option<TransformedModularSubimage<'_, S>>,
+    bitstream: &mut Bitstream,
+    offset: usize,
+    global_ma_config: Option<&MaConfig>,
+    stream_index: u32,
+    allow_partial: bool,
+    tracker: Option<&AllocTracker>,
+) -> jxl_frame::Result<bool> {
+    bitstream
+        .skip_bits(offset)
+        .map_err(jxl_frame::Error::from)?;
+    // No subimage: nothing to decode, group counts as complete.
+    let Some(modular) = modular else {
+        return Ok(true);
+    };
+    // Empty channel list: owned decode succeeds and the group is complete.
+    if modular.is_empty() {
+        return Ok(true);
+    }
+    let mut image = modular
+        .recursive(bitstream, global_ma_config, tracker)
+        .map_err(jxl_frame::Error::from)?;
+    let mut subimage = image
+        .prepare_subimage()
+        .map_err(jxl_frame::Error::from)?;
+    subimage
+        .decode(bitstream, stream_index, allow_partial)
+        .map_err(jxl_frame::Error::from)?;
+    Ok(subimage.finish())
+}
+
+fn note_group_result(
+    kind: TocGroupKind,
+    allow_partial: bool,
+    single: bool,
+    result: jxl_frame::Result<()>,
+    offset: usize,
+    single_offset: &mut usize,
+    stop_single: &mut bool,
+) -> Result<bool> {
+    let is_lf = matches!(kind, TocGroupKind::LfGroup(_));
+    let decoded = result.is_ok();
+    if let Err(error) = result {
+        let suppress = allow_partial && (!is_lf || !single || error.unexpected_eof());
+        if !suppress {
+            return Err(error.into());
+        }
+        if single && is_lf {
+            *stop_single = true;
+        }
+    }
+    if single {
+        *single_offset = offset;
+    }
+    Ok(decoded)
+}
+
 fn group_section(frame: &IndexedFrame, kind: TocGroupKind) -> Option<(Section, bool)> {
     let section = frame.data(kind)?.clone();
     let size = frame
@@ -179,9 +237,64 @@ pub(crate) async fn render_modular<S: Sample>(
         }
     }
 
+    // Inline executor: fill each destination grid on this thread.
+    let decode_inline = tasks.is_inline();
     let mut work = work.into_iter();
     let mut stop_single = false;
     loop {
+        if decode_inline {
+            while let Some(mut item) = work.next() {
+                if stop_single {
+                    continue;
+                }
+                let source = if let Some((section, partial)) = &single_section {
+                    Some((section.clone(), *partial, single_offset))
+                } else {
+                    group_section(frame, item.kind).map(|(section, partial)| (section, partial, 0))
+                };
+                let Some((section, allow_partial, offset)) = source else {
+                    continue;
+                };
+                let mut bitstream = Bitstream::from_section(&section);
+                let outcome = decode_group_inplace(
+                    item.modular.take(),
+                    &mut bitstream,
+                    offset,
+                    global_ma_config.as_deref(),
+                    item.stream_index,
+                    allow_partial,
+                    tracker,
+                );
+                let read_offset = bitstream.num_read_bits();
+                let (result, complete) = match outcome {
+                    Ok(complete) => (Ok(()), complete),
+                    Err(error) => (Err(error), true),
+                };
+                let decoded = note_group_result(
+                    item.kind,
+                    allow_partial,
+                    single,
+                    result,
+                    read_offset,
+                    &mut single_offset,
+                    &mut stop_single,
+                )?;
+                if decoded {
+                    if let TocGroupKind::LfGroup(idx) = item.kind {
+                        cache.lf_groups.insert(
+                            idx,
+                            LfGroup {
+                                lf_coeff: None,
+                                hf_meta: None,
+                                partial: !complete,
+                            },
+                        );
+                    }
+                }
+            }
+            break;
+        }
+
         let mut batch = Vec::with_capacity(GROUP_BATCH);
         let mut jobs: Vec<Box<dyn FnOnce() -> GroupOutput<S> + Send + 'static>> =
             Vec::with_capacity(GROUP_BATCH);
@@ -229,20 +342,15 @@ pub(crate) async fn render_modular<S: Sample>(
             .await
             .map_err(|_| Error::Modular(jxl_modular::Error::TaskCancelled))?;
         for ((mut item, allow_partial), mut output) in batch.into_iter().zip(outputs) {
-            let is_lf = matches!(item.kind, TocGroupKind::LfGroup(_));
-            let decoded = output.result.is_ok();
-            if let Err(error) = output.result {
-                let suppress = allow_partial && (!is_lf || !single || error.unexpected_eof());
-                if !suppress {
-                    return Err(error.into());
-                }
-                if single && is_lf {
-                    stop_single = true;
-                }
-            }
-            if single {
-                single_offset = output.offset;
-            }
+            let decoded = note_group_result(
+                item.kind,
+                allow_partial,
+                single,
+                output.result,
+                output.offset,
+                &mut single_offset,
+                &mut stop_single,
+            )?;
             let mut complete = true;
             if decoded {
                 if let Some(modular) = &mut output.modular {
