@@ -20,50 +20,50 @@ tracing = { version = "0.1.40", default-features = false }
 
 [dependencies.jxl-bitstream]
 package = "ps-jxl-bitstream"
-version = "0.13.0"
+version = "0.13.1"
 path = "../jxl-bitstream"
 default-features = false
 
 [dependencies.jxl-color]
 package = "ps-jxl-color"
-version = "0.13.0"
+version = "0.13.1"
 path = "../jxl-color"
 default-features = false
 
 [dependencies.jxl-frame]
 package = "ps-jxl-frame"
-version = "0.13.0"
+version = "0.13.1"
 path = "../jxl-frame"
 default-features = false
 
 [dependencies.jxl-grid]
 package = "ps-jxl-grid"
-version = "0.13.0"
+version = "0.13.1"
 path = "../jxl-grid"
 default-features = false
 
 [dependencies.jxl-image]
 package = "ps-jxl-image"
-version = "0.13.0"
+version = "0.13.1"
 path = "../jxl-image"
 default-features = false
 
 [dependencies.jxl-oxide-common]
 package = "ps-jxl-oxide-common"
-version = "0.13.0"
+version = "0.13.1"
 path = "../jxl-oxide-common"
 default-features = false
 
 [dependencies.jxl-render]
 package = "ps-jxl-render"
-version = "0.13.0"
+version = "0.13.1"
 path = "../jxl-render"
 default-features = false
 features = ["libm"]
 
 [dependencies.jxl-threadpool]
 package = "ps-jxl-threadpool"
-version = "0.13.0"
+version = "0.13.1"
 path = "../jxl-threadpool"
 default-features = false
 
