@@ -8,7 +8,7 @@ pub fn ycbcr_to_rgb(fb_cbycr: [&mut [f32]; 3]) {
 
     #[cfg(target_arch = "x86_64")]
     {
-        if is_x86_feature_detected!("avx")
+        if is_x86_feature_detected!("avx2")
             && is_x86_feature_detected!("fma")
             && (cfg!(feature = "std") || cfg!(target_feature = "avx2"))
         {

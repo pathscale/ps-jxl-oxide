@@ -3,7 +3,7 @@ use crate::math::FloatMath;
 pub(crate) fn run(xyb: [&mut [f32]; 3], ob: [f32; 3], intensity_target: f32) {
     #[cfg(target_arch = "x86_64")]
     {
-        if is_x86_feature_detected!("avx")
+        if is_x86_feature_detected!("avx2")
             && is_x86_feature_detected!("fma")
             && (cfg!(feature = "std") || cfg!(target_feature = "avx2"))
         {
