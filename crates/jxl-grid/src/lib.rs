@@ -25,7 +25,8 @@ pub struct OutOfMemory {
 }
 
 impl OutOfMemory {
-    fn new(bytes: usize) -> Self {
+    /// Creates an allocation error for a requested allocation size.
+    pub fn new(bytes: usize) -> Self {
         Self { bytes }
     }
 
