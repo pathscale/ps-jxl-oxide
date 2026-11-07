@@ -23,14 +23,18 @@ impl Bundle<&FrameHeader> for Splines {
         let mut decoder = jxl_coding::Decoder::parse(bitstream, 6)?;
         decoder.begin(bitstream)?;
 
-        let num_splines = decoder.read_varint(bitstream, 2)? as usize;
-        let num_pixels = (header.width * header.height) as usize;
-        let max_num_splines = usize::min(MAX_NUM_SPLINES, num_pixels / 4);
-        if num_splines >= max_num_splines {
-            tracing::error!(num_splines, max_num_splines, "Too many splines");
+        let encoded_num_splines = decoder.read_varint(bitstream, 2)? as u64;
+        let max_num_splines = spline_count_limit(header.width, header.height);
+        if encoded_num_splines >= max_num_splines as u64 {
+            tracing::error!(
+                num_splines = encoded_num_splines,
+                max_num_splines,
+                "Too many splines"
+            );
             return Err(jxl_bitstream::Error::ProfileConformance("too many splines").into());
         }
-        let num_splines = num_splines + 1;
+        // The encoded count is zero-based: the stream always contains one more spline.
+        let num_splines = encoded_num_splines as usize + 1;
 
         let mut start_points = vec![(0i64, 0i64); num_splines];
         let mut prev_point = (
@@ -49,14 +53,21 @@ impl Bundle<&FrameHeader> for Splines {
         let quant_adjust = unpack_signed(decoder.read_varint(bitstream, 0)?);
 
         let mut splines: Vec<QuantSpline> = Vec::with_capacity(num_splines);
-        let mut acc_control_points = 0usize;
+        let mut acc_control_points = 0u64;
         for start_point in start_points {
             let spline = QuantSpline::parse(
                 bitstream,
-                QuantSplineParams::new(start_point, num_pixels, &mut decoder, acc_control_points),
+                QuantSplineParams::new(
+                    start_point,
+                    header.width,
+                    header.height,
+                    &mut decoder,
+                    acc_control_points,
+                ),
             )?;
 
-            acc_control_points += spline.quant_points.len();
+            acc_control_points =
+                acc_control_points.saturating_add(spline.quant_points.len() as u64);
             splines.push(spline);
         }
 
@@ -72,33 +83,32 @@ impl Bundle<&FrameHeader> for Splines {
 impl Splines {
     pub(crate) fn estimate_area(&self, base_correlation_xb: Option<(f32, f32)>) -> u64 {
         let base_correlation_xb = base_correlation_xb.unwrap_or((0.0, 1.0));
-        let corr_x = crate::math::ceil(base_correlation_xb.0.abs()) as u64;
-        let corr_b = crate::math::ceil(base_correlation_xb.1.abs()) as u64;
+        let corr_x = crate::math::ceil(base_correlation_xb.0.abs()) as u128;
+        let corr_b = crate::math::ceil(base_correlation_xb.1.abs()) as u128;
         let quant_adjust = self.quant_adjust;
         let mut total_area = 0u64;
 
         for quant_spline in &self.quant_splines {
-            let log_color = {
-                let mut color_xyb = quant_spline.xyb_dct.map(|quant_color_dct| -> u64 {
-                    quant_color_dct
-                        .into_iter()
-                        .map(|q| div_ceil_qa(q.unsigned_abs(), quant_adjust))
-                        .sum()
-                });
-
-                color_xyb[0] += corr_x * color_xyb[1];
-                color_xyb[2] += corr_b * color_xyb[1];
-                log2_ceil(1u64 + color_xyb.into_iter().max().unwrap()) as u64
-            };
+            let mut color_xyb: [u128; 3] = quant_spline.xyb_dct.map(|quant_color_dct| {
+                quant_color_dct
+                    .into_iter()
+                    .map(|q| div_ceil_qa(q.unsigned_abs(), quant_adjust) as u128)
+                    .sum()
+            });
+            color_xyb[0] += corr_x * color_xyb[1];
+            color_xyb[2] += corr_b * color_xyb[1];
+            let max_color = color_xyb.into_iter().max().unwrap_or(0);
+            let log_color = ceil_log2_u128(max_color + 1) as u64;
 
             let mut width_estimate = 0u64;
             for quant_sigma_dct in quant_spline.sigma_dct {
-                let quant_sigma_dct = quant_sigma_dct.unsigned_abs();
-                let weight = 1 + div_ceil_qa(quant_sigma_dct, quant_adjust);
-                width_estimate += weight * weight * log_color;
+                let weight =
+                    div_ceil_qa(quant_sigma_dct.unsigned_abs(), quant_adjust).saturating_add(1);
+                let term = weight.saturating_mul(weight).saturating_mul(log_color);
+                width_estimate = width_estimate.saturating_add(term);
             }
-
-            total_area += width_estimate * quant_spline.manhattan_distance;
+            total_area = total_area
+                .saturating_add(width_estimate.saturating_mul(quant_spline.manhattan_distance));
         }
 
         total_area
@@ -106,8 +116,27 @@ impl Splines {
 }
 
 #[inline]
-fn log2_ceil(x: u64) -> u32 {
-    x.next_power_of_two().trailing_zeros()
+fn spline_pixel_count(width: u32, height: u32) -> u64 {
+    width as u64 * height as u64
+}
+
+#[inline]
+fn spline_count_limit(width: u32, height: u32) -> u64 {
+    (MAX_NUM_SPLINES as u64).min(spline_pixel_count(width, height) / 4)
+}
+
+#[inline]
+fn spline_point_limit(width: u32, height: u32) -> u64 {
+    (MAX_NUM_CONTROL_POINTS as u64).min(spline_pixel_count(width, height) / 2)
+}
+
+#[inline]
+fn ceil_log2_u128(x: u128) -> u32 {
+    if x <= 1 {
+        0
+    } else {
+        u128::BITS - (x - 1).leading_zeros()
+    }
 }
 
 #[inline]
@@ -117,28 +146,31 @@ fn div_ceil_qa(dividend: u32, quant_adjust: i32) -> u64 {
         let quant_adjust = quant_adjust as u64;
         (8 * dividend + 7 + quant_adjust) / (8 + quant_adjust)
     } else {
-        let abs_quant_adjust = (-quant_adjust) as u64;
+        let abs_quant_adjust = quant_adjust.unsigned_abs() as u64;
         dividend + (dividend * abs_quant_adjust).div_ceil(8)
     }
 }
 
 struct QuantSplineParams<'d> {
     start_point: (i64, i64),
-    num_pixels: usize,
+    width: u32,
+    height: u32,
     decoder: &'d mut Decoder,
-    acc_control_points: usize,
+    acc_control_points: u64,
 }
 
 impl<'d> QuantSplineParams<'d> {
     fn new(
         start_point: (i64, i64),
-        num_pixels: usize,
+        width: u32,
+        height: u32,
         decoder: &'d mut Decoder,
-        acc_control_points: usize,
+        acc_control_points: u64,
     ) -> Self {
         Self {
             start_point,
-            num_pixels,
+            width,
+            height,
             decoder,
             acc_control_points,
         }
@@ -163,22 +195,28 @@ impl Bundle<QuantSplineParams<'_>> for QuantSpline {
     ) -> core::result::Result<Self, Self::Error> {
         let QuantSplineParams {
             start_point,
-            num_pixels,
+            width,
+            height,
             decoder,
             acc_control_points,
         } = params;
 
-        let num_points = decoder.read_varint(bitstream, 3)? as usize;
-        let acc_num_points = acc_control_points + num_points;
-        let max_num_points = usize::min(MAX_NUM_CONTROL_POINTS, num_pixels / 2);
+        let encoded_num_points = decoder.read_varint(bitstream, 3)? as u64;
+        let acc_num_points = acc_control_points.saturating_add(encoded_num_points);
+        let max_num_points = spline_point_limit(width, height);
         if acc_num_points > max_num_points {
-            tracing::error!(num_points, max_num_points, "Too many spline points");
+            tracing::error!(
+                num_points = encoded_num_points,
+                max_num_points,
+                "Too many spline points"
+            );
             return Err(jxl_bitstream::Error::ProfileConformance("too many spline points").into());
         }
 
+        let num_points = encoded_num_points as usize;
         let mut quant_points = Vec::with_capacity(1 + num_points);
         let mut cur_value = start_point;
-        let mut cur_delta = (0, 0);
+        let mut cur_delta = (0i64, 0i64);
         let mut manhattan_distance = 0u64;
         quant_points.push(cur_value);
         for _ in 0..num_points {
@@ -186,9 +224,25 @@ impl Bundle<QuantSplineParams<'_>> for QuantSpline {
             let delta_x = unpack_signed(decoder.read_varint(bitstream, 4)?) as i64;
             let delta_y = unpack_signed(decoder.read_varint(bitstream, 4)?) as i64;
 
-            cur_delta.0 += delta_x;
-            cur_delta.1 += delta_y;
-            manhattan_distance += (cur_delta.0.abs() + cur_delta.1.abs()) as u64;
+            cur_delta.0 =
+                cur_delta
+                    .0
+                    .checked_add(delta_x)
+                    .ok_or(jxl_bitstream::Error::ValidationFailed(
+                        "control point overflowed",
+                    ))?;
+            cur_delta.1 =
+                cur_delta
+                    .1
+                    .checked_add(delta_y)
+                    .ok_or(jxl_bitstream::Error::ValidationFailed(
+                        "control point overflowed",
+                    ))?;
+            let segment_distance = cur_delta
+                .0
+                .unsigned_abs()
+                .saturating_add(cur_delta.1.unsigned_abs());
+            manhattan_distance = manhattan_distance.saturating_add(segment_distance);
             cur_value.0 = cur_value.0.checked_add(cur_delta.0).ok_or(
                 jxl_bitstream::Error::ValidationFailed("control point overflowed"),
             )?;
@@ -222,5 +276,97 @@ impl Bundle<QuantSplineParams<'_>> for QuantSpline {
             xyb_dct,
             sigma_dct,
         })
+    }
+}
+
+#[cfg(test)]
+mod spline_limits_tests {
+    use alloc::vec;
+
+    use super::{
+        QuantSpline, Splines, ceil_log2_u128, div_ceil_qa, spline_count_limit, spline_pixel_count,
+        spline_point_limit,
+    };
+
+    #[test]
+    fn spline_limits_apply_pixel_and_absolute_caps() {
+        assert_eq!(spline_pixel_count(65_536, 65_536), 1u64 << 32);
+        assert_eq!(spline_count_limit(65_536, 65_536), 1 << 24);
+        assert_eq!(spline_point_limit(65_536, 65_536), 1 << 20);
+        assert_eq!(spline_pixel_count(1 << 20, 1), 1u64 << 20);
+        assert_eq!(spline_count_limit(1 << 20, 1), 1 << 18);
+        assert_eq!(spline_point_limit(1 << 20, 1), 1 << 19);
+        assert_eq!(spline_count_limit(1 << 20, 1 << 20), 1 << 24);
+        assert_eq!(spline_point_limit(1 << 20, 1 << 20), 1 << 20);
+        assert_eq!(
+            spline_pixel_count(u32::MAX, u32::MAX),
+            (u32::MAX as u64).pow(2)
+        );
+        assert_eq!(spline_count_limit(u32::MAX, u32::MAX), 1 << 24);
+    }
+
+    #[test]
+    fn spline_limits_estimate_ordinary_zero_and_saturated_areas() {
+        let mut ordinary = QuantSpline::default();
+        ordinary.manhattan_distance = 3;
+        ordinary.xyb_dct[0][0] = 8;
+        let estimate = Splines {
+            quant_splines: vec![ordinary.clone()],
+            quant_adjust: 0,
+        }
+        .estimate_area(None);
+        assert_eq!(estimate, 3 * 32 * 4);
+
+        let mut correlated = QuantSpline::default();
+        correlated.manhattan_distance = 3;
+        correlated.xyb_dct[1][0] = 8;
+        let correlated = Splines {
+            quant_splines: vec![correlated],
+            quant_adjust: 0,
+        };
+        assert_eq!(correlated.estimate_area(Some((2.0, 0.0))), 3 * 32 * 5);
+        assert_eq!(correlated.estimate_area(None), 3 * 32 * 4);
+
+        ordinary.manhattan_distance = 0;
+        assert_eq!(
+            Splines {
+                quant_splines: vec![ordinary.clone()],
+                quant_adjust: 0
+            }
+            .estimate_area(None),
+            0
+        );
+        ordinary.manhattan_distance = 7;
+        ordinary.xyb_dct = [[0; 32]; 3];
+        assert_eq!(
+            Splines {
+                quant_splines: vec![ordinary],
+                quant_adjust: 0
+            }
+            .estimate_area(None),
+            0
+        );
+
+        let mut extreme = QuantSpline::default();
+        extreme.manhattan_distance = u64::MAX;
+        extreme.sigma_dct = [i32::MIN; 32];
+        extreme.xyb_dct[1] = [i32::MIN; 32];
+        let extreme = Splines {
+            quant_splines: vec![extreme.clone(), extreme],
+            quant_adjust: i32::MIN,
+        };
+        assert_eq!(extreme.estimate_area(Some((65_504.0, -65_504.0))), u64::MAX);
+
+        let mut half_max = QuantSpline::default();
+        half_max.manhattan_distance = 1 << 58;
+        half_max.xyb_dct[0][0] = 1;
+        let summed = Splines {
+            quant_splines: vec![half_max.clone(), half_max],
+            quant_adjust: 0,
+        };
+        assert_eq!(summed.estimate_area(None), u64::MAX);
+        assert_eq!(ceil_log2_u128(1), 0);
+        assert_eq!(ceil_log2_u128(5), 3);
+        assert!(div_ceil_qa(u32::MAX, i32::MIN) > u32::MAX as u64);
     }
 }
