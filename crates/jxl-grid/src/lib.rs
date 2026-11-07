@@ -81,6 +81,26 @@ impl<S> AlignedGrid<S> {
 impl<S: Default + Clone> AlignedGrid<S> {
     const ALIGN: usize = 32;
 
+    #[inline]
+    fn checked_layout(width: usize, height: usize) -> Result<(usize, usize), OutOfMemory> {
+        let size = core::mem::size_of::<S>();
+        let len = width
+            .checked_mul(height)
+            .ok_or_else(|| OutOfMemory::new(usize::MAX))?;
+        let padding = (Self::ALIGN - 1) / size;
+        let buf_len = len
+            .checked_add(padding)
+            .ok_or_else(|| OutOfMemory::new(usize::MAX))?;
+        let bytes = buf_len
+            .checked_mul(size)
+            .ok_or_else(|| OutOfMemory::new(usize::MAX))?;
+        if bytes > isize::MAX as usize {
+            return Err(OutOfMemory::new(bytes));
+        }
+
+        Ok((len, buf_len))
+    }
+
     /// Create a new buffer, recording the allocation if a tracker is given.
     #[inline]
     pub fn with_alloc_tracker(
@@ -88,12 +108,7 @@ impl<S: Default + Clone> AlignedGrid<S> {
         height: usize,
         tracker: Option<&AllocTracker>,
     ) -> Result<Self, OutOfMemory> {
-        let len = width
-            .checked_mul(height)
-            .expect("grid dimensions overflow usize");
-        let buf_len = len
-            .checked_add((Self::ALIGN - 1) / core::mem::size_of::<S>())
-            .expect("aligned grid buffer length overflows usize");
+        let (len, buf_len) = Self::checked_layout(width, height)?;
         let handle = tracker
             .map(|tracker| tracker.alloc::<S>(buf_len))
             .transpose()?;
@@ -103,7 +118,7 @@ impl<S: Default + Clone> AlignedGrid<S> {
         let offset = ((Self::ALIGN - extra) % Self::ALIGN) / core::mem::size_of::<S>();
         let len_with_offset = len
             .checked_add(offset)
-            .expect("aligned grid buffer length overflows usize");
+            .ok_or_else(|| OutOfMemory::new(usize::MAX))?;
         buf.resize_with(len_with_offset, S::default);
 
         Ok(Self {
@@ -121,12 +136,7 @@ impl<S: Default + Clone> AlignedGrid<S> {
         height: usize,
         tracker: Option<&AllocTracker>,
     ) -> Result<Self, OutOfMemory> {
-        let len = width
-            .checked_mul(height)
-            .expect("grid dimensions overflow usize");
-        let buf_len = len
-            .checked_add((Self::ALIGN - 1) / core::mem::size_of::<S>())
-            .expect("aligned grid buffer length overflows usize");
+        let (len, buf_len) = Self::checked_layout(width, height)?;
         let handle = tracker
             .map(|tracker| tracker.alloc::<S>(buf_len))
             .transpose()?;
@@ -312,5 +322,156 @@ impl<V: Copy> AlignedGrid<V> {
     #[inline]
     pub fn get(&self, x: usize, y: usize) -> V {
         *self.get_ref(x, y)
+    }
+}
+
+#[cfg(test)]
+mod grid_allocation_bounds_tests {
+    use super::{AlignedGrid, AllocTracker, OutOfMemory};
+
+    type Constructor<T> = fn(
+        usize,
+        usize,
+        Option<&AllocTracker>,
+    ) -> Result<AlignedGrid<T>, OutOfMemory>;
+
+    fn check_rejected<T: Default + Clone>(
+        constructor: Constructor<T>,
+        width: usize,
+        height: usize,
+        expected_bytes: usize,
+    ) {
+        let err = constructor(width, height, None).unwrap_err();
+        assert_eq!(err.bytes(), expected_bytes);
+
+        let tracker = AllocTracker::with_limit(64);
+        let err = constructor(width, height, Some(&tracker)).unwrap_err();
+        assert_eq!(err.bytes(), expected_bytes);
+        drop(tracker.alloc::<u8>(64).expect("rejection must not charge tracker"));
+    }
+
+    fn check_all_rejections<T: Default + Clone>(constructor: Constructor<T>) {
+        check_rejected(constructor, usize::MAX, 2, usize::MAX);
+        check_rejected(constructor, usize::MAX, 1, usize::MAX);
+    }
+
+    fn with_tracker_u8(
+        width: usize,
+        height: usize,
+        tracker: Option<&AllocTracker>,
+    ) -> Result<AlignedGrid<u8>, OutOfMemory> {
+        AlignedGrid::with_alloc_tracker(width, height, tracker)
+    }
+
+    fn empty_aligned_u8(
+        width: usize,
+        height: usize,
+        tracker: Option<&AllocTracker>,
+    ) -> Result<AlignedGrid<u8>, OutOfMemory> {
+        AlignedGrid::empty_aligned(width, height, tracker)
+    }
+
+    fn with_tracker_u64(
+        width: usize,
+        height: usize,
+        tracker: Option<&AllocTracker>,
+    ) -> Result<AlignedGrid<u64>, OutOfMemory> {
+        AlignedGrid::with_alloc_tracker(width, height, tracker)
+    }
+
+    fn empty_aligned_u64(
+        width: usize,
+        height: usize,
+        tracker: Option<&AllocTracker>,
+    ) -> Result<AlignedGrid<u64>, OutOfMemory> {
+        AlignedGrid::empty_aligned(width, height, tracker)
+    }
+
+    #[test]
+    fn grid_allocation_bounds_reject_overflow_and_vec_ceiling() {
+        check_all_rejections(with_tracker_u8);
+        check_all_rejections(empty_aligned_u8);
+        check_rejected(
+            with_tracker_u8,
+            isize::MAX as usize,
+            1,
+            isize::MAX as usize + 31,
+        );
+        check_rejected(
+            empty_aligned_u8,
+            isize::MAX as usize,
+            1,
+            isize::MAX as usize + 31,
+        );
+        check_rejected(
+            with_tracker_u64,
+            usize::MAX / 8 + 1,
+            1,
+            usize::MAX,
+        );
+        check_rejected(
+            empty_aligned_u64,
+            usize::MAX / 8 + 1,
+            1,
+            usize::MAX,
+        );
+    }
+
+    #[test]
+    fn grid_allocation_bounds_preserve_tracker_budget_and_drop_charges() {
+        let tracker = AllocTracker::with_limit(31);
+        let err = AlignedGrid::<u8>::with_alloc_tracker(1, 1, Some(&tracker)).unwrap_err();
+        assert_eq!(err.bytes(), 32);
+        drop(tracker.alloc::<u8>(31).expect("failed budget request must not charge"));
+
+        let tracker = AllocTracker::with_limit(32);
+        let grid = AlignedGrid::<u8>::with_alloc_tracker(1, 1, Some(&tracker)).unwrap();
+        assert!(tracker.alloc::<u8>(1).is_err(), "live grid must retain its full charge");
+        drop(grid);
+        drop(tracker.alloc::<u8>(32).expect("drop must restore grid budget"));
+
+        let tracker = AllocTracker::with_limit(64);
+        let grid = AlignedGrid::<u8>::with_alloc_tracker(1, 1, Some(&tracker)).unwrap();
+        let clone = grid.try_clone().unwrap();
+        assert!(tracker.alloc::<u8>(1).is_err(), "live original and clone must exhaust the budget");
+        drop(clone);
+        drop(tracker.alloc::<u8>(32).expect("dropping clone restores its charge"));
+        assert!(tracker.alloc::<u8>(33).is_err(), "live original must retain its charge");
+        drop(grid);
+        drop(tracker.alloc::<u8>(64).expect("dropping original restores its charge"));
+    }
+
+    fn check_small_grid<S>()
+    where
+        S: Default + Clone + Copy + PartialEq + core::fmt::Debug + From<u8>,
+    {
+        let mut grid = AlignedGrid::<S>::with_alloc_tracker(3, 2, None).unwrap();
+        assert_eq!((grid.width(), grid.height()), (3, 2));
+        assert_eq!(grid.buf().len(), 6);
+        assert!(grid.buf().iter().all(|sample| *sample == S::default()));
+        assert_eq!(grid.buf().as_ptr() as usize % 32, 0);
+        *grid.get_mut(2, 1) = S::from(17);
+
+        let clone = grid.try_clone().unwrap();
+        assert_eq!((clone.width(), clone.height()), (3, 2));
+        assert_eq!(clone.buf().len(), 6);
+        assert_eq!(clone.get(2, 1), S::from(17));
+        assert_eq!(clone.buf().as_ptr() as usize % 32, 0);
+
+        for (width, height) in [(0, 0), (0, 3), (3, 0)] {
+            let empty = AlignedGrid::<S>::with_alloc_tracker(width, height, None).unwrap();
+            assert_eq!((empty.width(), empty.height()), (width, height));
+            assert_eq!(empty.buf().len(), 0);
+            assert_eq!(empty.buf().as_ptr() as usize % 32, 0);
+            let cloned = empty.try_clone().unwrap();
+            assert_eq!((cloned.width(), cloned.height()), (width, height));
+            assert_eq!(cloned.buf().len(), 0);
+        }
+    }
+
+    #[test]
+    fn grid_allocation_bounds_keep_small_u8_and_u64_layouts() {
+        check_small_grid::<u8>();
+        check_small_grid::<u64>();
     }
 }
