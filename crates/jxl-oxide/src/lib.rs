@@ -131,7 +131,7 @@ use alloc::{boxed::Box, sync::Arc, vec::Vec};
 
 use jxl_bitstream::{Bitstream, ContainerParser, ParseEvent};
 pub use jxl_bitstream::{Section, Spans};
-use jxl_frame::FrameContext;
+use jxl_frame::{FrameContext, FrameHeaderParser};
 use jxl_image::BitDepth;
 use jxl_oxide_common::{Bundle, Name};
 use jxl_render::ImageBuffer;
@@ -325,7 +325,10 @@ impl UninitializedJxlImage {
         };
 
         let embedded_icc = if image_header.metadata.colour_encoding.want_icc() {
-            let icc = match jxl_color::icc::read_icc(&mut bitstream) {
+            let icc = match jxl_color::icc::read_icc_with_alloc_tracker(
+                &mut bitstream,
+                self.tracker.as_ref(),
+            ) {
                 Ok(x) => x,
                 Err(e) if e.unexpected_eof() => {
                     return Ok(self.need_more());
@@ -335,8 +338,9 @@ impl UninitializedJxlImage {
                 }
             };
             tracing::debug!("Image has an embedded ICC profile");
-            let icc = jxl_color::icc::decode_icc(&icc)?;
-            Some(icc)
+            let decoded_icc = jxl_color::icc::decode_icc(&icc.0)?;
+            drop(icc);
+            Some(decoded_icc)
         } else {
             None
         };
@@ -414,6 +418,7 @@ impl UninitializedJxlImage {
                 end_of_image: false,
                 buffer: self.buffer,
                 buffer_offset: bytes_read,
+                frame_header_parser: FrameHeaderParser::default(),
                 frame_offsets: Vec::new(),
                 aux_boxes: self.aux_boxes,
             },
@@ -830,6 +835,7 @@ struct JxlImageInner {
     end_of_image: bool,
     buffer: Spans,
     buffer_offset: usize,
+    frame_header_parser: FrameHeaderParser,
     frame_offsets: Vec<usize>,
     aux_boxes: AuxBoxList,
 }
@@ -838,26 +844,18 @@ impl JxlImageInner {
     fn feed_bytes_inner(&mut self, ctx: &mut RenderContext) -> Result<()> {
         while !self.end_of_image {
             if ctx.current_loading_frame().is_none() {
-                if self.buffer_offset == self.buffer.len() {
+                let Some((frame, header_end)) = ctx.load_frame_header_incremental(
+                    &mut self.frame_header_parser,
+                    &self.buffer,
+                    self.buffer_offset,
+                )?
+                else {
                     return Ok(());
-                }
-                let pending = self.buffer.section(self.buffer_offset..self.buffer.len())?;
-                let mut bitstream = Bitstream::from_section(&pending);
-                let frame = match ctx.load_frame_header(&mut bitstream) {
-                    Ok(frame) => frame,
-                    Err(e) if e.unexpected_eof() => return Ok(()),
-                    Err(e) => return Err(e.into()),
                 };
                 let frame_index = frame.index();
                 assert_eq!(self.frame_offsets.len(), frame_index);
                 self.frame_offsets.push(self.buffer_offset);
-                self.buffer_offset = self
-                    .buffer_offset
-                    .checked_add(bitstream.num_read_bits() / 8)
-                    .filter(|offset| *offset <= self.buffer.len())
-                    .ok_or(jxl_bitstream::Error::ValidationFailed(
-                        "frame header extent overflow",
-                    ))?;
+                self.buffer_offset = header_end;
             }
             let frame =
                 ctx.current_loading_frame()
@@ -882,6 +880,139 @@ impl JxlImageInner {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::string::ToString;
+
+    #[test]
+    fn frame_header_retry_resumes_permuted_toc_prefix_setup() {
+        const IMAGE_HEADER: [u8; 5] = [0xff, 0x0a, 0xf8, 0x9f, 0x01];
+
+        fn write(bits: &mut Vec<bool>, value: u32, width: usize) {
+            bits.extend((0..width).map(|bit| value & (1 << bit) != 0));
+        }
+
+        fn prefix_setup(bits: &mut Vec<bool>) {
+            write(bits, 1, 1); // Prefix coding.
+            write(bits, 15, 4); // Hybrid integer split exponent.
+            write(bits, 1, 1);
+            write(bits, 14, 4);
+            write(bits, (1 << 14) - 1, 14); // 32,768 symbols.
+            write(bits, 0x701c, 16); // Code-length tree for symbols 0 and 1.
+            bits.push(true);
+            bits.resize(bits.len() + 32_766, false);
+            bits.push(true);
+        }
+
+        fn initialized_image() -> JxlImage {
+            let mut uninit = JxlImage::builder().build_uninit();
+            uninit.feed(Arc::from(IMAGE_HEADER)).unwrap();
+            let InitializeResult::Initialized(image) = uninit.try_init().unwrap() else {
+                panic!("complete image header");
+            };
+            image
+        }
+
+        // Default frame header, permuted TOC, LZ77 off, entropy-coded
+        // cluster map, MTF off, and LZ77 off for the nested decoder.
+        let mut bits = vec![true, true, false, false, false, false];
+        prefix_setup(&mut bits);
+        write(&mut bits, 0, 8); // Eight contexts mapped to cluster zero.
+        prefix_setup(&mut bits);
+        write(&mut bits, 0, 1); // Zero permutation integers, so order is unchanged.
+        bits.resize(bits.len().next_multiple_of(8), false);
+        write(&mut bits, 4, 12); // LF global has one byte of payload.
+        for _ in 0..6 {
+            write(&mut bits, 0, 12);
+        }
+        let header = bits
+            .chunks(8)
+            .map(|byte| {
+                byte.iter()
+                    .enumerate()
+                    .fold(0u8, |value, (i, &bit)| value | (u8::from(bit) << i))
+            })
+            .collect::<Vec<_>>();
+
+        let mut whole = initialized_image();
+        whole.feed(Arc::from(header.as_slice())).unwrap();
+        let mut split = initialized_image();
+        for (i, &byte) in header.iter().enumerate() {
+            split.feed(Arc::from([byte])).unwrap();
+            assert_eq!(split.frame(0).is_some(), i + 1 == header.len());
+        }
+
+        let whole = whole.frame(0).unwrap();
+        let split = split.frame(0).unwrap();
+        let expected_range = IMAGE_HEADER.len()..IMAGE_HEADER.len() + header.len();
+        assert_eq!(whole.header_data().unwrap().range(), expected_range);
+        assert_eq!(split.header_data().unwrap().range(), expected_range);
+        let groups = |frame: &jxl_frame::Frame| {
+            frame.toc()
+                .iter_bitstream_order()
+                .map(|group| (group.kind, group.offset, group.size))
+                .collect::<Vec<_>>()
+        };
+        let whole_groups = groups(whole);
+        assert_eq!(groups(split), whole_groups);
+        assert_eq!(whole_groups.len(), 7);
+        assert_eq!(whole_groups[0].1, header.len());
+        assert_eq!(whole_groups[0].2, 1);
+    }
+
+    #[test]
+    fn frame_header_retry_preserves_completion_and_errors() {
+        // 512×512 default image and frame headers. The unpermuted TOC has
+        // seven entries: one byte in LF global and zero in the other groups.
+        let image_header = [0xff, 0x0a, 0xf8, 0x9f, 0x01];
+        let frame_header = [1, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+        let initialized = |prefix: &[u8]| {
+            let mut uninit = JxlImage::builder().build_uninit();
+            uninit.feed(Arc::from(image_header.as_slice())).unwrap();
+            uninit.feed(Arc::from(prefix)).unwrap();
+            let InitializeResult::Initialized(image) = uninit.try_init().unwrap() else {
+                panic!("complete image header");
+            };
+            image
+        };
+        let mut image = initialized(&frame_header[..2]);
+        assert!(image.frame(0).is_none());
+        for &byte in &frame_header[2..frame_header.len() - 1] {
+            image.feed(Arc::from([byte])).unwrap();
+            assert!(image.frame(0).is_none());
+        }
+        let mut truncated = initialized(&[]);
+        truncated.feed(Arc::from(&frame_header[..frame_header.len() - 1])).unwrap();
+        assert_eq!(
+            truncated.finalize().unwrap_err().to_string(),
+            "input ended before loading all image frames"
+        );
+        let mut malformed = initialized(&[]);
+        let mut bad_header = frame_header;
+        bad_header[0] |= 0x80;
+        let whole_error = malformed.feed(Arc::from(bad_header)).unwrap_err();
+        let split_error = initialized(&[]).feed(Arc::from([bad_header[0]])).unwrap_err();
+        assert_eq!(whole_error.to_string(), split_error.to_string());
+        assert!(split_error.to_string().contains("PadZeroToByte"));
+
+        image.feed(Arc::from([0])).unwrap();
+
+        let frame = image.frame(0).unwrap();
+        let header = frame.header_data().unwrap();
+        assert_eq!(header.range(), 5..17);
+        assert!(header.spans().chunks().flatten().copied().eq(frame_header));
+        assert_eq!(image.frame_offset(0), Some(5));
+        assert!(!image.is_loading_done());
+
+        image.feed(Arc::from([0])).unwrap();
+        assert!(image.is_loading_done());
+        assert_eq!(image.num_loaded_keyframes(), 1);
+        image.finalize().unwrap();
     }
 }
 

@@ -1,6 +1,4 @@
 use alloc::{boxed::Box, vec::Vec};
-#[cfg(feature = "std")]
-use std::io::Write;
 
 use self::brotli::BrotliReader;
 use jxl_bitstream::ParseEvent;
@@ -17,6 +15,7 @@ pub use exif::*;
 pub struct AuxBoxReader {
     data: DataKind,
     done: bool,
+    failed: bool,
 }
 
 #[derive(Default)]
@@ -64,13 +63,20 @@ impl AuxBoxReader {
     }
 
     pub(super) fn ensure_brotli(&mut self) -> Result<()> {
+        self.ensure_brotli_with_limit(brotli::MAX_DECODED_AUX_BOX_SIZE)
+    }
+
+    fn ensure_brotli_with_limit(&mut self, limit: usize) -> Result<()> {
+        if self.failed {
+            return Err(crate::error::Error::InvalidData("Brotli auxiliary box has failed").into());
+        }
         if self.done {
             return Ok(());
         }
 
         match self.data {
             DataKind::Init => {
-                let writer = BrotliReader::new(Vec::<u8>::new(), 4096);
+                let writer = BrotliReader::with_limit(limit);
                 self.data = DataKind::Brotli(Box::new(writer));
             }
             DataKind::NoData | DataKind::Raw(_) => {
@@ -84,6 +90,9 @@ impl AuxBoxReader {
 
 impl AuxBoxReader {
     pub fn feed_data(&mut self, data: &[u8]) -> Result<()> {
+        if self.failed {
+            return Err(crate::error::Error::InvalidData("Brotli auxiliary box has failed").into());
+        }
         if self.done {
             return Err(crate::error::Error::InvalidData("cannot feed into finalized box").into());
         }
@@ -99,30 +108,44 @@ impl AuxBoxReader {
                 buf.extend_from_slice(data);
             }
             DataKind::Brotli(ref mut writer) => {
-                writer.write_all(data)?;
+                if let Err(error) = writer.write_all(data) {
+                    self.failed = true;
+                    return Err(error);
+                }
             }
         }
         Ok(())
     }
 
     pub fn finalize(&mut self) -> Result<()> {
+        if self.failed {
+            return Err(crate::error::Error::InvalidData("Brotli auxiliary box has failed").into());
+        }
         if self.done {
             return Ok(());
         }
 
         if let DataKind::Brotli(ref mut writer) = self.data {
-            writer.flush()?;
-            writer.close()?;
+            if let Err(error) = writer.flush().and_then(|()| writer.close()) {
+                self.failed = true;
+                return Err(error);
+            }
         }
 
         match core::mem::replace(&mut self.data, DataKind::NoData) {
             DataKind::Init | DataKind::NoData => {}
             DataKind::Raw(buf) => self.data = DataKind::Raw(buf),
             DataKind::Brotli(writer) => {
-                let inner = writer.into_inner().inspect_err(|_| {
-                    tracing::warn!("Brotli decompressor reported an error");
-                });
-                let buf = inner.unwrap_or_else(|buf| buf);
+                let buf = match writer.into_inner() {
+                    Ok(buf) => buf,
+                    Err(_) => {
+                        self.failed = true;
+                        return Err(
+                            crate::error::Error::InvalidData("incomplete Brotli auxiliary box")
+                                .into(),
+                        );
+                    }
+                };
                 self.data = DataKind::Raw(buf);
             }
         }
@@ -147,6 +170,62 @@ impl AuxBoxReader {
             DataKind::NoData => AuxBoxData::NotFound,
             DataKind::Raw(buf) => AuxBoxData::Data(buf),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AuxBoxData, AuxBoxReader};
+
+    const BROTLI_HELLO: &[u8] = b"\x8f\x02\x80hello\n\x03";
+    const HELLO: &[u8] = b"hello\n";
+
+    fn start_reader(limit: usize) -> AuxBoxReader {
+        let mut reader = AuxBoxReader::new();
+        reader.ensure_brotli_with_limit(limit).unwrap();
+        reader
+    }
+
+    #[test]
+    fn brotli_aux_box_limit_accepts_exact_decoded_size() {
+        let mut reader = start_reader(HELLO.len());
+        for chunk in BROTLI_HELLO.chunks(3) {
+            reader.feed_data(chunk).unwrap();
+        }
+        reader.finalize().unwrap();
+        reader.finalize().unwrap();
+        assert_eq!(reader.data().unwrap(), HELLO);
+    }
+
+    #[test]
+    fn brotli_aux_box_limit_rejects_whole_crossing_append_and_stays_failed() {
+        let mut reader = start_reader(HELLO.len() - 1);
+        let mut failed = false;
+        for chunk in BROTLI_HELLO.chunks(3) {
+            if reader.feed_data(chunk).is_err() {
+                failed = true;
+                break;
+            }
+        }
+        if !failed {
+            failed = reader.finalize().is_err();
+        }
+        assert!(failed);
+        assert!(reader.feed_data(BROTLI_HELLO).is_err());
+        assert!(reader.finalize().is_err());
+        assert!(reader.data().is_decoding());
+    }
+
+    #[test]
+    fn truncated_brotli_aux_box_stays_failed_after_finalize() {
+        let mut reader = start_reader(HELLO.len());
+        for chunk in BROTLI_HELLO[..BROTLI_HELLO.len() - 1].chunks(2) {
+            reader.feed_data(chunk).unwrap();
+        }
+        assert!(reader.finalize().is_err());
+        assert!(reader.feed_data(BROTLI_HELLO).is_err());
+        assert!(reader.finalize().is_err());
+        assert!(matches!(reader.data(), AuxBoxData::Decoding));
     }
 }
 
@@ -232,6 +311,7 @@ pub struct AuxBoxList {
     current_box_ty: Option<ContainerBoxType>,
     current_box: AuxBoxReader,
     last_box: bool,
+    failed: bool,
 }
 
 impl AuxBoxList {
@@ -241,10 +321,23 @@ impl AuxBoxList {
             current_box_ty: None,
             current_box: AuxBoxReader::new(),
             last_box: false,
+            failed: false,
         }
     }
 
     pub(super) fn handle_event(&mut self, event: ParseEvent) -> Result<()> {
+        if self.failed {
+            return Err(crate::error::Error::InvalidData("auxiliary box list has failed").into());
+        }
+
+        let result = self.handle_event_inner(event);
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
+    }
+
+    fn handle_event_inner(&mut self, event: ParseEvent) -> Result<()> {
         match event {
             ParseEvent::BitstreamKind(_) => {}
             ParseEvent::Codestream(_) => {}
@@ -301,7 +394,14 @@ impl AuxBoxList {
     }
 
     pub(super) fn eof(&mut self) -> Result<()> {
-        self.finalize()?;
+        if self.failed {
+            return Err(crate::error::Error::InvalidData("auxiliary box list has failed").into());
+        }
+
+        if let Err(error) = self.finalize() {
+            self.failed = true;
+            return Err(error);
+        }
         self.last_box = true;
         Ok(())
     }
@@ -330,5 +430,47 @@ impl AuxBoxList {
     /// Returns the first XML metadata, if any.
     pub fn first_xml(&self) -> AuxBoxData<&[u8]> {
         self.first_of_type(ContainerBoxType::XML)
+    }
+}
+
+#[cfg(test)]
+mod list_failure_tests {
+    use alloc::sync::Arc;
+    use jxl_bitstream::{ParseEvent, Section, Spans, container::ContainerBoxType};
+
+    use super::AuxBoxList;
+
+    const TRUNCATED_BROTLI_HELLO: &[u8] = b"\x8f\x02\x80hello\n";
+
+    #[test]
+    fn failed_brotli_box_end_rejects_later_raw_box_start() {
+        let mut list = AuxBoxList::new();
+        let compressed_ty = ContainerBoxType::EXIF;
+        list.handle_event(ParseEvent::AuxBoxStart {
+            ty: compressed_ty,
+            brotli_compressed: true,
+            last_box: false,
+        })
+        .unwrap();
+
+        let bytes: Arc<[u8]> = Arc::from(TRUNCATED_BROTLI_HELLO);
+        let mut spans = Spans::new();
+        spans.append(bytes, 0..TRUNCATED_BROTLI_HELLO.len()).unwrap();
+        let section = Section::new(0, spans).unwrap();
+        list.handle_event(ParseEvent::AuxBoxData(compressed_ty, section))
+            .unwrap();
+
+        assert!(list
+            .handle_event(ParseEvent::AuxBoxEnd(compressed_ty))
+            .is_err());
+        assert!(list
+            .handle_event(ParseEvent::AuxBoxStart {
+                ty: ContainerBoxType::XML,
+                brotli_compressed: false,
+                last_box: true,
+            })
+            .is_err());
+        assert!(list.eof().is_err());
+        assert!(list.boxes.is_empty());
     }
 }

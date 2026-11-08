@@ -29,9 +29,9 @@ fn fast_pow2f_x86_64_sse2(x: core::arch::x86_64::__m128) -> core::arch::x86_64::
     use core::arch::x86_64::*;
 
     unsafe {
-        #[cfg(any(feature = "std", target_feature = "sse4.1"))]
+        #[cfg(target_feature = "sse4.1")]
         let x_floor = _mm_floor_ps(x);
-        #[cfg(not(any(feature = "std", target_feature = "sse4.1")))]
+        #[cfg(not(target_feature = "sse4.1"))]
         let x_floor = {
             let mut lanes = [0f32; 4];
             _mm_storeu_ps(lanes.as_mut_ptr(), x);
@@ -60,6 +60,7 @@ fn fast_pow2f_x86_64_sse2(x: core::arch::x86_64::__m128) -> core::arch::x86_64::
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "fma")]
+#[target_feature(enable = "sse4.1")]
 #[inline]
 unsafe fn fast_pow2f_x86_64_fma(x: core::arch::x86_64::__m128) -> core::arch::x86_64::__m128 {
     use core::arch::x86_64::*;
@@ -269,6 +270,7 @@ pub fn fast_powf_x86_64_sse2(
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "fma")]
+#[target_feature(enable = "sse4.1")]
 #[inline]
 pub unsafe fn fast_powf_x86_64_fma(
     base: core::arch::x86_64::__m128,

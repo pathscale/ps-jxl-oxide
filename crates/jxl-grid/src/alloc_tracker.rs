@@ -26,7 +26,11 @@ impl AllocTracker {
     ///
     /// Returns an error if the allocation exceeds the current limit.
     pub fn alloc<T>(&self, count: usize) -> Result<AllocHandle, crate::OutOfMemory> {
-        let bytes = count * core::mem::size_of::<T>();
+        let Some(bytes) = count.checked_mul(core::mem::size_of::<T>()) else {
+            // The requested allocation cannot be represented by `usize`; reject it instead of
+            // letting the accounting size wrap below the configured memory limit.
+            return Err(crate::OutOfMemory::new(usize::MAX));
+        };
         let result = self.inner.bytes_left.fetch_update(
             Ordering::Relaxed,
             Ordering::Relaxed,
@@ -94,5 +98,16 @@ impl AllocHandle {
         AllocTracker {
             inner: Arc::clone(&self.inner),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AllocTracker;
+
+    #[test]
+    fn allocation_size_overflow_is_rejected() {
+        let tracker = AllocTracker::with_limit(usize::MAX);
+        assert!(tracker.alloc::<u64>(usize::MAX).is_err());
     }
 }

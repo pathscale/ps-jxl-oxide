@@ -132,8 +132,15 @@ impl Histogram {
     }
 
     pub fn parse(bitstream: &mut Bitstream, alphabet_size: u32) -> CodingResult<Self> {
+        match Self::parse_start(bitstream, alphabet_size)? {
+            HistogramStart::Complete(histogram) => Ok(histogram),
+            HistogramStart::Complex(mut parser) => parser.read::<false>(bitstream),
+        }
+    }
+
+    fn parse_start(bitstream: &mut Bitstream, alphabet_size: u32) -> CodingResult<HistogramStart> {
         if alphabet_size == 1 {
-            return Ok(Self::with_single_symbol(0));
+            return Ok(HistogramStart::Complete(Self::with_single_symbol(0)));
         }
 
         if alphabet_size > 1u32 << MAX_PREFIX_BITS {
@@ -142,9 +149,9 @@ impl Histogram {
 
         let hskip = bitstream.read_bits(2)?;
         if hskip == 1 {
-            Self::parse_simple(bitstream, alphabet_size)
+            Self::parse_simple(bitstream, alphabet_size).map(HistogramStart::Complete)
         } else {
-            Self::parse_complex(bitstream, alphabet_size, hskip)
+            ComplexHistogram::new(bitstream, alphabet_size, hskip).map(HistogramStart::Complex)
         }
     }
 
@@ -207,8 +214,50 @@ impl Histogram {
         }
         Self::with_code_lengths(code_lengths)
     }
+}
 
-    fn parse_complex(
+enum HistogramStart {
+    Complete(Histogram),
+    Complex(ComplexHistogram),
+}
+
+#[derive(Debug)]
+pub(super) struct ComplexHistogram {
+    code_length_histogram: Histogram,
+    code_lengths: Vec<u8>,
+    next: usize,
+    bitacc: usize,
+    prev_sym: u8,
+    last_nonzero_sym: u8,
+    last_repeat_count: usize,
+    repeat_count: usize,
+    repeat_sym: u8,
+    #[cfg(test)]
+    symbol_attempts: usize,
+}
+
+impl ComplexHistogram {
+    pub(super) fn resume(
+        parser: &mut Option<Self>,
+        bitstream: &mut Bitstream,
+        alphabet_size: u32,
+    ) -> CodingResult<Histogram> {
+        if parser.is_none() {
+            let mut input = bitstream.clone();
+            let start = Histogram::parse_start(&mut input, alphabet_size)?;
+            *bitstream = input;
+            match start {
+                HistogramStart::Complete(histogram) => return Ok(histogram),
+                HistogramStart::Complex(complex) => *parser = Some(complex),
+            }
+        }
+
+        let histogram = parser.as_mut().unwrap().read::<true>(bitstream)?;
+        *parser = None;
+        Ok(histogram)
+    }
+
+    fn new(
         bitstream: &mut Bitstream,
         alphabet_size: u32,
         hskip: u32,
@@ -262,75 +311,90 @@ impl Histogram {
             Histogram::with_code_lengths(code_length_code_lengths.to_vec())?
         };
 
-        let mut code_lengths = vec![0u8; alphabet_size as usize];
-        let mut bitacc = 0usize;
+        Ok(Self {
+            code_length_histogram,
+            code_lengths: vec![0; alphabet_size as usize],
+            next: 0,
+            bitacc: 0,
+            prev_sym: 8,
+            last_nonzero_sym: 8,
+            last_repeat_count: 0,
+            repeat_count: 0,
+            repeat_sym: 0,
+            #[cfg(test)]
+            symbol_attempts: 0,
+        })
+    }
 
-        let mut prev_sym = 8u8;
-        let mut last_nonzero_sym = 8u8;
-        let mut last_repeat_count = 0usize;
-
-        let mut repeat_count = 0usize;
-        let mut repeat_sym = 0u8;
-        for len in &mut code_lengths {
-            if repeat_count > 0 {
-                *len = repeat_sym;
-                repeat_count -= 1;
+    fn read<const RESUME: bool>(&mut self, bitstream: &mut Bitstream) -> CodingResult<Histogram> {
+        while self.next < self.code_lengths.len() {
+            let len = if self.repeat_count > 0 {
+                self.repeat_count -= 1;
+                self.repeat_sym
             } else {
-                let sym = code_length_histogram.read_symbol(bitstream)? as u8;
-                match sym {
-                    0 => {}
+                let (sym, repeat_count) = if RESUME {
+                    let mut input = bitstream.clone();
+                    let symbol = self.read_length_symbol(&mut input)?;
+                    *bitstream = input;
+                    symbol
+                } else {
+                    self.read_length_symbol(bitstream)?
+                };
+                let len = match sym {
+                    0 => 0,
                     1..=15 => {
-                        *len = sym;
-                        last_nonzero_sym = sym;
+                        self.last_nonzero_sym = sym;
+                        sym
                     }
-                    16 => {
-                        repeat_count = bitstream.peek_bits_prefilled(2) as usize + 3;
-                        bitstream.consume_bits(2)?;
-                        if prev_sym == 16 {
-                            repeat_count += last_repeat_count * 3 - 8;
-                            last_repeat_count += repeat_count;
+                    16 | 17 => {
+                        self.repeat_count = repeat_count;
+                        if self.prev_sym == sym {
+                            let (factor, offset) = if sym == 16 { (3, 8) } else { (7, 16) };
+                            self.repeat_count += self.last_repeat_count * factor - offset;
+                            self.last_repeat_count += self.repeat_count;
                         } else {
-                            last_repeat_count = repeat_count;
+                            self.last_repeat_count = self.repeat_count;
                         }
-                        repeat_sym = last_nonzero_sym;
-
-                        *len = repeat_sym;
-                        repeat_count -= 1;
-                    }
-                    17 => {
-                        repeat_count = bitstream.peek_bits_prefilled(3) as usize + 3;
-                        bitstream.consume_bits(3)?;
-                        if prev_sym == 17 {
-                            repeat_count += last_repeat_count * 7 - 16;
-                            last_repeat_count += repeat_count;
-                        } else {
-                            last_repeat_count = repeat_count;
-                        }
-                        repeat_sym = 0;
-
-                        *len = repeat_sym;
-                        repeat_count -= 1;
+                        self.repeat_sym = if sym == 16 { self.last_nonzero_sym } else { 0 };
+                        self.repeat_count -= 1;
+                        self.repeat_sym
                     }
                     _ => unreachable!(),
-                }
-                prev_sym = sym;
-            }
+                };
+                self.prev_sym = sym;
+                len
+            };
 
-            if *len != 0 {
-                bitacc += 1 << MAX_PREFIX_BITS.saturating_sub(*len as usize);
-
-                if bitacc > 1 << MAX_PREFIX_BITS {
-                    return Err(Error::PrefixSymbolTooLarge(bitacc));
-                } else if bitacc == 1 << MAX_PREFIX_BITS && repeat_count == 0 {
+            self.code_lengths[self.next] = len;
+            self.next += 1;
+            if len != 0 {
+                self.bitacc += 1 << MAX_PREFIX_BITS.saturating_sub(len as usize);
+                if self.bitacc > 1 << MAX_PREFIX_BITS {
+                    return Err(Error::PrefixSymbolTooLarge(self.bitacc));
+                } else if self.bitacc == 1 << MAX_PREFIX_BITS && self.repeat_count == 0 {
                     break;
                 }
             }
         }
 
-        if bitacc != 1 << MAX_PREFIX_BITS || repeat_count > 0 {
+        if self.bitacc != 1 << MAX_PREFIX_BITS || self.repeat_count > 0 {
             return Err(Error::InvalidPrefixHistogram);
         }
-        Self::with_code_lengths(code_lengths)
+        Histogram::with_code_lengths(core::mem::take(&mut self.code_lengths))
+    }
+
+    fn read_length_symbol(&mut self, bitstream: &mut Bitstream) -> CodingResult<(u8, usize)> {
+        #[cfg(test)]
+        {
+            self.symbol_attempts += 1;
+        }
+        let sym = self.code_length_histogram.read_symbol(bitstream)? as u8;
+        let repeat_count = match sym {
+            16 => bitstream.read_bits(2)? as usize + 3,
+            17 => bitstream.read_bits(3)? as usize + 3,
+            _ => 0,
+        };
+        Ok((sym, repeat_count))
     }
 }
 
@@ -384,5 +448,49 @@ fn vec_reverse_bits(v: &[Entry], out: &mut Vec<Entry>) {
         let rev_idx = idx.reverse_bits() >> shift;
         let entry = v[rev_idx];
         out.push(entry);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_header_retry_bounds_prefix_symbol_reads() {
+        const ALPHABET_SIZE: usize = 1 << MAX_PREFIX_BITS;
+        // hskip = 0, code lengths 1, 0, 0, 0, 1 in code-length order.
+        let mut input = vec![0x1c, 0x70];
+        input.resize(2 + ALPHABET_SIZE / 8, 0);
+        input[2] = 1;
+        *input.last_mut().unwrap() = 0x80;
+
+        let mut initial = Bitstream::new(&input[..2]);
+        let HistogramStart::Complex(mut parser) =
+            Histogram::parse_start(&mut initial, ALPHABET_SIZE as u32).unwrap()
+        else {
+            panic!("expected a complex prefix histogram");
+        };
+        let mut next_bit = initial.num_read_bits();
+        assert_eq!(next_bit, 16);
+        for end in 3..=input.len() {
+            let mut stream = Bitstream::new(&input[..end]);
+            stream.skip_bits(next_bit).unwrap();
+            match parser.read::<true>(&mut stream) {
+                Err(error) if error.unexpected_eof() => assert!(end < input.len()),
+                Ok(histogram) => {
+                    assert_eq!(end, input.len());
+                    let mut symbols = Bitstream::new(&[0b10]);
+                    assert_eq!(histogram.read_symbol(&mut symbols).unwrap(), 0);
+                    assert_eq!(
+                        histogram.read_symbol(&mut symbols).unwrap(),
+                        ALPHABET_SIZE as u32 - 1
+                    );
+                }
+                result => panic!("unexpected histogram result: {result:?}"),
+            }
+            next_bit = stream.num_read_bits();
+        }
+        assert_eq!(next_bit, input.len() * 8);
+        assert!(parser.symbol_attempts <= ALPHABET_SIZE + input.len());
     }
 }

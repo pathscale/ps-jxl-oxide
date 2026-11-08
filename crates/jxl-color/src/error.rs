@@ -5,6 +5,7 @@ use alloc::boxed::Box;
 pub enum Error {
     Bitstream(jxl_bitstream::Error),
     Decoder(jxl_coding::Error),
+    OutOfMemory(jxl_grid::OutOfMemory),
     InvalidIccStream(&'static str),
     IccParseFailure(&'static str),
     UnsupportedColorEncoding,
@@ -30,6 +31,12 @@ impl From<jxl_coding::Error> for Error {
     }
 }
 
+impl From<jxl_grid::OutOfMemory> for Error {
+    fn from(err: jxl_grid::OutOfMemory) -> Self {
+        Self::OutOfMemory(err)
+    }
+}
+
 impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         use Error::*;
@@ -37,6 +44,7 @@ impl core::fmt::Display for Error {
         match self {
             Bitstream(err) => write!(f, "bitstream error: {err}"),
             Decoder(err) => write!(f, "entropy decoder error: {err}"),
+            OutOfMemory(err) => write!(f, "allocation error: {err}"),
             InvalidIccStream(s) => write!(f, "invalid ICC stream: {s}"),
             IccParseFailure(s) => write!(f, "parsing ICC profile failed: {s}"),
             UnsupportedColorEncoding => write!(f, "unsupported color encoding"),
@@ -59,6 +67,7 @@ impl core::error::Error for Error {
         match self {
             Bitstream(err) => Some(err),
             Decoder(err) => Some(err),
+            OutOfMemory(err) => Some(err),
             CmsFailure(err) => Some(&**err),
             _ => None,
         }
