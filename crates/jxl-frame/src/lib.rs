@@ -92,15 +92,20 @@ impl Bundle<FrameContext<'_>> for Frame {
     type Error = crate::Error;
 
     fn parse(bitstream: &mut Bitstream, ctx: FrameContext) -> Result<Self> {
-        let FrameContext {
-            image_header,
-            tracker,
-        } = ctx;
-        let tracker = tracker.cloned();
+        let (base_offset, header) = Self::parse_header(bitstream, &ctx.image_header)?;
+        let toc = Toc::parse(bitstream, &header)?;
+        Self::from_header(bitstream, ctx, base_offset, header, toc)
+    }
+}
 
+impl Frame {
+    fn parse_header(
+        bitstream: &mut Bitstream,
+        image_header: &ImageHeader,
+    ) -> Result<(usize, FrameHeader)> {
         bitstream.zero_pad_to_byte()?;
         let base_offset = bitstream.num_read_bits() / 8;
-        let header = FrameHeader::parse(bitstream, &image_header)?;
+        let header = FrameHeader::parse(bitstream, image_header)?;
 
         let width = header.width as u64;
         let height = header.height as u64;
@@ -192,7 +197,21 @@ impl Bundle<FrameContext<'_>> for Frame {
             .into());
         }
 
-        let mut toc = Toc::parse(bitstream, &header)?;
+        Ok((base_offset, header))
+    }
+
+    fn from_header(
+        bitstream: &Bitstream,
+        ctx: FrameContext<'_>,
+        base_offset: usize,
+        header: FrameHeader,
+        mut toc: Toc,
+    ) -> Result<Self> {
+        let FrameContext {
+            image_header,
+            tracker,
+        } = ctx;
+        let tracker = tracker.cloned();
         toc.adjust_offsets(base_offset)?;
         let header_data = bitstream
             .source_section(base_offset..bitstream.num_read_bits() / 8)
@@ -219,6 +238,73 @@ impl Bundle<FrameContext<'_>> for Frame {
             reading_data_index: 0,
             pass_shifts,
         })
+    }
+}
+
+/// Resumes a frame header and TOC over an append-only codestream.
+#[derive(Debug, Default)]
+pub struct FrameHeaderParser {
+    toc: Option<(FrameHeader, TocParser)>,
+    next_bit: usize,
+    retry_at: usize,
+    #[cfg(test)]
+    header_attempts: usize,
+}
+
+impl FrameHeaderParser {
+    /// Returns a complete frame and its absolute header end, or waits for more bytes.
+    /// Resume with the same frame start, context and append-only source until completion.
+    pub fn parse(
+        &mut self,
+        source: &Spans,
+        frame_start: usize,
+        ctx: FrameContext<'_>,
+    ) -> Result<Option<(Frame, usize)>> {
+        let available = source.len().saturating_sub(frame_start);
+        if available == 0 || available < self.retry_at {
+            return Ok(None);
+        }
+        let mut bitstream = Bitstream::from_spans_at(source, frame_start)?;
+        if self.toc.is_none() {
+            #[cfg(test)]
+            {
+                self.header_attempts += 1;
+            }
+            // Ordinary fields are format-bounded. Incomplete name and extension
+            // payloads supply the exact minimum extent needed to try again.
+            let header = match Frame::parse_header(&mut bitstream, &ctx.image_header) {
+                Ok((_, header)) => header,
+                Err(error) if error.unexpected_eof() => {
+                    self.retry_at = bitstream.required_byte_len().max(available + 1);
+                    return Ok(None);
+                }
+                Err(error) => return Err(error),
+            };
+            self.next_bit = bitstream.num_read_bits();
+            let toc = TocParser::new(&header)?;
+            self.toc = Some((header, toc));
+        } else {
+            bitstream.skip_bits(self.next_bit)?;
+        }
+
+        let (header, toc) = self.toc.as_mut().unwrap();
+        let toc = match toc.parse(&mut bitstream, header) {
+            Ok(toc) => toc,
+            Err(error) if error.unexpected_eof() => {
+                self.next_bit = bitstream.num_read_bits();
+                self.retry_at = available + 1;
+                return Ok(None);
+            }
+            Err(error) => {
+                *self = Self::default();
+                return Err(error);
+            }
+        };
+        let (header, _) = self.toc.take().unwrap();
+        self.next_bit = 0;
+        self.retry_at = 0;
+        let frame = Frame::from_header(&bitstream, ctx, 0, header, toc)?;
+        Ok(Some((frame, frame_start + bitstream.num_read_bits() / 8)))
     }
 }
 
@@ -681,5 +767,134 @@ impl Frame {
             *width += delta_w + padding;
             *height += delta_h + padding;
         }
+    }
+}
+
+#[cfg(test)]
+mod frame_header_retry_tests {
+    use super::*;
+
+    #[test]
+    fn frame_header_retry_preserves_one_shot_toc_eof() {
+        const IMAGE_HEADER: [u8; 5] = [0xff, 0x0a, 0xf8, 0x9f, 0x01];
+        let context = FrameContext {
+            image_header: Arc::new(ImageHeader::parse(&mut Bitstream::new(&IMAGE_HEADER), ()).unwrap()),
+            tracker: None,
+        };
+        let mut bits = Vec::new();
+        let mut write = |value: u32, width: usize| {
+            bits.extend((0..width).map(|bit| ((value >> bit) & 1) as u8));
+        };
+        write(0b001011, 6); // Default frame, permuted TOC, no LZ77, simple one-cluster map.
+        write(1, 1); // Prefix coding.
+        write(1, 6); // Hybrid integer split exponent 1, no token bits.
+        write(7, 8); // Nine-symbol alphabet.
+        write(0b1001, 4); // Simple histogram with three symbols.
+        write(4, 4); // Token 4 has code 0.
+        write(0, 4); // Token 0 has code 10.
+        write(3, 4); // Token 3 has code 11.
+        write(3, 2); // End token 3, followed by two hybrid bits.
+        write(0, 2); // End value 4. The split falls between these two bits.
+        for _ in 0..4 {
+            write(1, 2); // Token 0, yielding identity Lehmer digits.
+        }
+        bits.resize(bits.len().next_multiple_of(8), 0);
+        bits.extend([0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]); // First group size 1.
+        bits.resize((bits.len() + 6 * 12).next_multiple_of(8), 0);
+        let bytes: Arc<[u8]> = Arc::from(
+            IMAGE_HEADER
+                .into_iter()
+                .chain(bits.chunks_exact(8).map(|byte| {
+                    byte.iter().enumerate().fold(0, |acc, (i, bit)| acc | (*bit << i))
+                }))
+                .collect::<Vec<_>>(),
+        );
+        let frame_start = IMAGE_HEADER.len();
+        let split = frame_start + 5;
+        let mut source = Spans::new();
+        source.append(Arc::clone(&bytes), 0..split).unwrap();
+        let mut short = Bitstream::from_spans(&source);
+        short.skip_bits(frame_start * 8).unwrap();
+        let error = Frame::parse(&mut short, context.clone()).unwrap_err();
+        assert!(error.unexpected_eof(), "{error:?}");
+        let mut parser = FrameHeaderParser::default();
+        assert!(parser.parse(&source, frame_start, context.clone()).unwrap().is_none());
+
+        source.append(Arc::clone(&bytes), split..bytes.len()).unwrap();
+        let (resumed, end) = parser.parse(&source, frame_start, context.clone()).unwrap().unwrap();
+        let mut input = Bitstream::from_spans(&source);
+        input.skip_bits(frame_start * 8).unwrap();
+        let whole = Frame::parse(&mut input, context).unwrap();
+        assert_eq!(end, bytes.len());
+        for frame in [resumed, whole] {
+            assert_eq!(frame.header_data().unwrap().range(), frame_start..end);
+            assert_eq!(frame.toc().bookmark(), end - frame_start);
+            assert_eq!(frame.toc().total_byte_size(), 1);
+        }
+    }
+
+    #[test]
+    fn frame_header_retry_skips_incomplete_name_and_extension() {
+        const IMAGE_HEADER: [u8; 5] = [0xff, 0x0a, 0xf8, 0x9f, 0x01];
+        const NAME_LEN: usize = 1024;
+        const EXTENSION_BITS: usize = 32_768;
+        let image_header = Arc::new(
+            ImageHeader::parse(&mut Bitstream::new(&IMAGE_HEADER), ()).unwrap(),
+        );
+        let context = FrameContext {
+            image_header,
+            tracker: None,
+        };
+        let mut bits = Vec::new();
+        let mut write = |value: usize, width: usize| {
+            bits.extend((0..width).map(|bit| ((value >> bit) & 1) as u8));
+        };
+        write(0, 1 + 2 + 1 + 2); // Non-default regular VarDCT frame, zero flags.
+        write(0, 2 + 3 + 3 + 2 + 1 + 2); // Upsampling, quantizers, passes, crop, blend.
+        write(1, 1); // Last frame.
+        write(3, 2);
+        write(NAME_LEN - 48, 10);
+        for _ in 0..NAME_LEN {
+            write(b'x' as usize, 8);
+        }
+        write(1, 1); // Default restoration filter.
+        write(1, 2);
+        write(0, 4); // One extension.
+        write(3, 2);
+        write(0, 12);
+        write(1, 1);
+        write(EXTENSION_BITS >> 12, 8);
+        write(0, 1);
+        bits.resize(bits.len() + EXTENSION_BITS, 0);
+        bits.push(0); // Unpermuted TOC.
+        bits.resize(bits.len().next_multiple_of(8), 0);
+        bits.extend([0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]); // LF global size 1.
+        bits.resize((bits.len() + 6 * 12).next_multiple_of(8), 0);
+
+        let header: Vec<u8> = bits
+            .chunks_exact(8)
+            .map(|byte| byte.iter().enumerate().fold(0, |acc, (i, bit)| acc | (*bit << i)))
+            .collect();
+        let frame_start = IMAGE_HEADER.len();
+        let mut source = Spans::new();
+        source.append(Arc::from(IMAGE_HEADER), 0..frame_start).unwrap();
+        let mut parser = FrameHeaderParser::default();
+        for (i, &byte) in header.iter().enumerate() {
+            source.append(Arc::from([byte]), 0..1).unwrap();
+            let result = parser.parse(&source, frame_start, context.clone()).unwrap();
+            if i + 1 == header.len() {
+                let (frame, end) = result.unwrap();
+                assert_eq!(frame.header().name.as_bytes(), &[b'x'; NAME_LEN]);
+                assert_eq!(frame.toc().bookmark(), header.len());
+                assert_eq!(end, frame_start + header.len());
+                assert_eq!(frame.header_data().unwrap().range(), frame_start..end);
+            } else {
+                assert!(result.is_none());
+            }
+        }
+
+        // Only the short structural prefix/suffix and the two declared ends
+        // trigger fresh FrameHeader parses, even with a byte per feed.
+        assert!(parser.header_attempts <= 12, "{}", parser.header_attempts);
     }
 }

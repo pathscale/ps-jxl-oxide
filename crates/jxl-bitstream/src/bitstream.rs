@@ -12,9 +12,11 @@ pub struct Bitstream<'buf> {
     next_span: usize,
     remaining_bytes: usize,
     logical_start: usize,
+    span_start: usize,
     buf: u64,
     num_read_bits: usize,
     remaining_buf_bits: usize,
+    required_end_bit: usize,
 }
 
 impl core::fmt::Debug for Bitstream<'_> {
@@ -45,9 +47,11 @@ impl<'buf> Bitstream<'buf> {
             next_span: 0,
             remaining_bytes: bytes.len(),
             logical_start: 0,
+            span_start: 0,
             buf: 0,
             num_read_bits: 0,
             remaining_buf_bits: 0,
+            required_end_bit: 0,
         }
     }
 
@@ -59,10 +63,26 @@ impl<'buf> Bitstream<'buf> {
             next_span: 1,
             remaining_bytes: spans.len(),
             logical_start: 0,
+            span_start: 0,
             buf: 0,
             num_read_bits: 0,
             remaining_buf_bits: 0,
+            required_end_bit: 0,
         }
+    }
+
+    /// Reads from a byte offset without slicing or copying span descriptors.
+    pub fn from_spans_at(spans: &'buf Spans, start: usize) -> BitstreamResult<Self> {
+        let remaining_bytes = spans.len().checked_sub(start).ok_or(Error::UnexpectedEof)?;
+        let (index, bytes) = spans.locate(start);
+        Ok(Self {
+            bytes,
+            next_span: index + 1,
+            remaining_bytes,
+            logical_start: start,
+            span_start: start,
+            ..Self::from_spans(spans)
+        })
     }
 
     /// Creates a reader retaining the section's logical origin.
@@ -82,8 +102,28 @@ impl<'buf> Bitstream<'buf> {
                 .logical_start
                 .checked_add(range.start)
                 .ok_or(Error::ValidationFailed("section origin overflow"))?;
+            let end = self
+                .span_start
+                .checked_add(range.end)
+                .ok_or(Error::ValidationFailed("section end overflow"))?;
+            let range = self.span_start + range.start..end;
             Section::new(start, spans.slice(range)?)
         })
+    }
+
+    /// Returns the byte length requested by the last incomplete skip or extent check.
+    pub fn required_byte_len(&self) -> usize {
+        self.required_end_bit.div_ceil(8)
+    }
+
+    /// Checks that the requested bits are available without consuming them.
+    pub fn require_bits(&mut self, count: usize) -> BitstreamResult<()> {
+        let bytes_needed = count.saturating_sub(self.remaining_buf_bits).div_ceil(8);
+        if bytes_needed > self.remaining_bytes {
+            self.required_end_bit = self.num_read_bits.saturating_add(count);
+            return Err(Error::UnexpectedEof);
+        }
+        Ok(())
     }
 
     /// Returns the number of bits that are read or skipped.
@@ -254,6 +294,7 @@ impl Bitstream<'_> {
             .checked_mul(8)
             .ok_or(Error::ValidationFailed("bitstream length overflow"))?;
         if n > available {
+            self.required_end_bit = self.num_read_bits.saturating_add(n);
             self.num_read_bits += available;
             self.skip_bytes(self.remaining_bytes);
             return Err(Error::UnexpectedEof);

@@ -9,12 +9,12 @@ extern crate std;
 
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 
-use jxl_bitstream::Bitstream;
+use jxl_bitstream::{Bitstream, Spans};
 use jxl_color::{
     ColorEncodingWithProfile, ColorManagementSystem, ColorTransform, ColourEncoding, ColourSpace,
     EnumColourEncoding, RenderingIntent, TransferFunction,
 };
-use jxl_frame::{Frame, FrameContext};
+use jxl_frame::{Frame, FrameContext, FrameHeaderParser};
 use jxl_grid::AllocTracker;
 use jxl_image::{ImageHeader, ImageMetadata};
 
@@ -357,10 +357,7 @@ impl RenderContext {
 
 impl RenderContext {
     pub fn load_frame_header(&mut self, bitstream: &mut Bitstream) -> Result<&mut IndexedFrame> {
-        if self.loading_frame.is_some() && !self.try_finalize_current_frame() {
-            panic!("another frame is still loading");
-        }
-
+        self.prepare_to_load_frame();
         let image_header = &self.image_header;
 
         let bitstream_original = bitstream.clone();
@@ -378,6 +375,34 @@ impl RenderContext {
             }
         };
 
+        self.set_loading_frame(frame)
+    }
+
+    /// Loads the next frame once its header and TOC are available.
+    pub fn load_frame_header_incremental(
+        &mut self,
+        parser: &mut FrameHeaderParser,
+        source: &Spans,
+        frame_start: usize,
+    ) -> Result<Option<(&mut IndexedFrame, usize)>> {
+        self.prepare_to_load_frame();
+        let context = FrameContext {
+            image_header: self.image_header.clone(),
+            tracker: self.tracker.as_ref(),
+        };
+        let Some((frame, end)) = parser.parse(source, frame_start, context)? else {
+            return Ok(None);
+        };
+        Ok(Some((self.set_loading_frame(frame)?, end)))
+    }
+
+    fn prepare_to_load_frame(&mut self) {
+        if self.loading_frame.is_some() && !self.try_finalize_current_frame() {
+            panic!("another frame is still loading");
+        }
+    }
+
+    fn set_loading_frame(&mut self, frame: Frame) -> Result<&mut IndexedFrame> {
         let header = frame.header();
         // Check if LF frame exists
         if header.flags.use_lf_frame() && self.lf_frame[header.lf_level as usize] == usize::MAX {
