@@ -381,3 +381,50 @@ impl Toc {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jxl_image::ImageHeader;
+
+    #[test]
+    fn permuted_toc_resumes_at_split_ans_seed() {
+        let mut image_bits = Bitstream::new(&[0xff, 0x0a, 0xf8, 0x9f, 0x01]);
+        let image = ImageHeader::parse(&mut image_bits, ()).unwrap();
+        let header = crate::FrameHeader::parse(&mut Bitstream::new(&[1]), &image).unwrap();
+        // One ANS cluster emits symbol 1 for both the permutation length and
+        // its first Lehmer digit, swapping the first two of seven groups.
+        // The seed starts at bit 17. The first bitstream group has size 1.
+        let mut bytes = [0u8; 18];
+        bytes[..8].copy_from_slice(&[0x05, 0x2d, 0, 0, 0x26, 0, 0, 4]);
+
+        let mut whole_bits = Bitstream::new(&bytes);
+        let whole = Toc::parse(&mut whole_bits, &header).unwrap();
+        assert_eq!(whole.group_index_bitstream_order(TocGroupKind::LfGlobal), 1);
+        assert_eq!(whole.bookmark(), bytes.len());
+        assert_eq!(whole.total_byte_size(), 1);
+
+        let mut parser = TocParser::new(&header).unwrap();
+        let mut next_bit = 0;
+        for len in 3..7 {
+            let mut short = Bitstream::new(&bytes[..len]);
+            short.skip_bits(next_bit).unwrap();
+            let error = parser.parse(&mut short, &header).unwrap_err();
+            assert!(error.unexpected_eof(), "{error:?}");
+            next_bit = short.num_read_bits();
+            assert_eq!(next_bit, 17);
+        }
+
+        let mut resumed_bits = Bitstream::new(&bytes);
+        resumed_bits.skip_bits(next_bit).unwrap();
+        let resumed = parser.parse(&mut resumed_bits, &header).unwrap();
+        assert_eq!(resumed_bits.num_read_bits(), whole_bits.num_read_bits());
+        let group_fields = |group: TocGroup| (group.kind, group.offset, group.size);
+        assert!(
+            resumed
+                .iter_bitstream_order()
+                .map(group_fields)
+                .eq(whole.iter_bitstream_order().map(group_fields))
+        );
+    }
+}

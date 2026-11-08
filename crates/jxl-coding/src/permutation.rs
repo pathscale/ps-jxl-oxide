@@ -117,4 +117,31 @@ mod tests {
         assert_eq!(order, [2, 4, 0, 1, 3, 5, 6, 7]);
         assert_eq!(complete.num_read_bits(), 9);
     }
+
+    #[test]
+    fn split_ans_integer_restores_seed_and_renormalization() {
+        // Equal ANS probabilities for tokens 4 and 5. Seed 2^16
+        // forces 16 renormalization bits before either hybrid suffix.
+        let mut setup = Bitstream::new(&[0xa0, 0x5c, 0x54, 0, 0x08]);
+        let mut decoder = crate::Decoder::parse(&mut setup, 1).unwrap();
+        assert_eq!(setup.num_read_bits(), 36);
+        let mut whole_decoder = decoder.clone();
+        let mut short = Bitstream::new(&[0, 0, 1, 0, 0, 0]);
+        let error = decoder.read_checkpointed_integer(&mut short, 0).unwrap_err();
+        assert!(error.unexpected_eof(), "{error:?}");
+        assert_eq!(short.num_read_bits(), 0);
+
+        let bytes = [0, 0, 1, 0, 0, 0, 1];
+        let mut whole = Bitstream::new(&bytes);
+        let mut resumed = Bitstream::new(&bytes);
+        for expected_position in [49, 50] {
+            let expected = whole_decoder.read_varint(&mut whole, 0).unwrap();
+            assert_eq!(
+                decoder.read_checkpointed_integer(&mut resumed, 0).unwrap(),
+                expected
+            );
+            assert_eq!(resumed.num_read_bits(), expected_position);
+            assert_eq!(whole.num_read_bits(), expected_position);
+        }
+    }
 }
