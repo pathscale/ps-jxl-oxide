@@ -1,4 +1,5 @@
 mod toc;
+pub(crate) use toc::TocParser;
 pub use toc::{Toc, TocGroup, TocGroupKind};
 
 mod hf_global;

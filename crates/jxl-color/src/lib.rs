@@ -14,9 +14,6 @@
 
 extern crate alloc;
 
-#[cfg(all(not(feature = "std"), not(feature = "libm")))]
-compile_error!("enable the libm feature when building jxl-color without std");
-
 // Keep host dispatch under std and use only guaranteed CPU features without std.
 #[cfg(all(target_arch = "x86_64", feature = "std"))]
 macro_rules! is_x86_feature_detected {

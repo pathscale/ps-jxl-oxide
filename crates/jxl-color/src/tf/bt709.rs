@@ -30,7 +30,10 @@ pub fn linear_to_bt709(samples: &mut [f32]) {
 
     #[cfg(target_arch = "x86_64")]
     let samples = {
-        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+        if is_x86_feature_detected!("avx2")
+            && is_x86_feature_detected!("fma")
+            && is_x86_feature_detected!("sse4.1")
+        {
             unsafe { linear_to_bt709_x86_64_avx2(samples) }
         } else {
             let mut it = samples.chunks_exact_mut(4);
@@ -73,6 +76,7 @@ pub fn linear_to_bt709(samples: &mut [f32]) {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 #[target_feature(enable = "fma")]
+#[target_feature(enable = "sse4.1")]
 unsafe fn linear_to_bt709_x86_64_avx2(samples: &mut [f32]) -> &mut [f32] {
     use core::arch::x86_64::*;
 

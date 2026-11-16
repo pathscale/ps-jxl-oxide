@@ -8,7 +8,7 @@ mod decode;
 mod parse;
 mod synthesize;
 
-pub use decode::{decode_icc, read_icc};
+pub use decode::{decode_icc, read_icc, read_icc_with_alloc_tracker};
 pub use parse::icc_tf;
 pub(crate) use parse::parse_icc;
 pub(crate) use parse::parse_icc_raw;

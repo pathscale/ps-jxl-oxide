@@ -4,6 +4,8 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
+pub mod math;
+
 extern crate alloc;
 
 use alloc::{string::String, vec};
@@ -308,6 +310,7 @@ impl<Ctx> Bundle<Ctx> for Name {
 
     fn parse(bitstream: &mut Bitstream, _: Ctx) -> Result<Self, Self::Error> {
         let len = read_bits!(bitstream, U32(0, u(4), 16 + u(5), 48 + u(10)))? as usize;
+        bitstream.require_bits(len * 8)?;
         let mut data = vec![0u8; len];
         for b in &mut data {
             *b = bitstream.read_bits(8)? as u8;
