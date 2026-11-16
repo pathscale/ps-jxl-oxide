@@ -38,7 +38,10 @@ pub fn apply_gamma(samples: &mut [f32], gamma: f32) {
 
     #[cfg(target_arch = "x86_64")]
     let samples = {
-        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+        if is_x86_feature_detected!("avx2")
+            && is_x86_feature_detected!("fma")
+            && is_x86_feature_detected!("sse4.1")
+        {
             unsafe { linear_to_gamma_x86_64_avx2(samples, gamma) }
         } else {
             let mut it = samples.chunks_exact_mut(4);
@@ -72,6 +75,7 @@ pub fn apply_gamma(samples: &mut [f32], gamma: f32) {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 #[target_feature(enable = "fma")]
+#[target_feature(enable = "sse4.1")]
 unsafe fn linear_to_gamma_x86_64_avx2(samples: &mut [f32], gamma: f32) -> &mut [f32] {
     use core::arch::x86_64::*;
 
@@ -96,6 +100,45 @@ unsafe fn linear_to_gamma_x86_64_avx2(samples: &mut [f32], gamma: f32) -> &mut [
     _mm_storeu_ps(chunk.as_mut_ptr(), v);
 
     remainder
+}
+
+#[cfg(all(test, target_arch = "x86_64"))]
+mod x86_transfer_function_tests {
+    use super::{apply_gamma, linear_to_bt709};
+
+    fn assert_dispatch_matches_scalar(samples: &[f32], convert: impl Fn(&mut [f32])) {
+        for &len in &[4, 5, 13] {
+            let input = &samples[..len];
+            let mut actual = input.to_vec();
+            convert(&mut actual);
+
+            for (index, (&sample, actual)) in input.iter().zip(actual).enumerate() {
+                let mut expected = [sample];
+                convert(&mut expected);
+                assert!(
+                    (actual - expected[0]).abs() <= 1e-5,
+                    "length {len}, sample {index}: got {actual}, expected {}",
+                    expected[0],
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn x86_transfer_function_dispatch_matches_scalar() {
+        let samples = [
+            0.0, 1e-8, 1e-7, 0.00001, 0.018, 0.0180001, 0.125, 0.25, 0.5, 0.75, 0.9, 0.99, 1.0,
+        ];
+
+        assert_dispatch_matches_scalar(&samples, |values| apply_gamma(values, 0.45));
+        for &len in &[4, 5, 13] {
+            let mut gamma = samples[..len].to_vec();
+            apply_gamma(&mut gamma, 0.45);
+            assert_eq!(&gamma[..3], &[0.0; 3], "length {len}: gamma zero branch");
+        }
+
+        assert_dispatch_matches_scalar(&samples, linear_to_bt709);
+    }
 }
 
 /// Converts scene luminance values to display luminance values using the hybrid log-gamma

@@ -55,8 +55,6 @@ impl<S: Sample> Bundle<LfGlobalParams<'_, '_>> for LfGlobal<S> {
             frame_header: header,
             ..
         } = params;
-        let image_size = (header.width * header.height) as u64;
-
         let patches = header
             .flags
             .patches()
@@ -134,20 +132,18 @@ impl<S: Sample> Bundle<LfGlobalParams<'_, '_>> for LfGlobal<S> {
             let estimated_area = splines.estimate_area(base_correlation_xb);
 
             // Maximum total_estimated_area_reached for Level 10
-            let max_estimated_area = (1u64 << 42).min(1024 * image_size + (1u64 << 32));
-            if estimated_area > max_estimated_area {
+            let (level5_limit, max_estimated_area) =
+                spline_area_limits(header.width, header.height);
+            if let Err(error) = validate_spline_area(estimated_area, max_estimated_area) {
                 tracing::error!(
                     estimated_area,
                     max_estimated_area,
                     "Too large estimated area for splines"
                 );
-                return Err(jxl_bitstream::Error::ProfileConformance(
-                    "too large estimated area for splines",
-                )
-                .into());
+                return Err(error);
             }
             // Maximum total_estimated_area_reached for Level 5
-            if estimated_area > (1u64 << 30).min(8 * image_size + (1u64 << 25)) {
+            if estimated_area > level5_limit {
                 tracing::warn!(
                     "Large estimated_area of splines, expect slower decoding: {}",
                     estimated_area
@@ -310,5 +306,76 @@ impl<S: Sample> Bundle<LfGlobalParams<'_, '_>> for GlobalModular<S> {
             extra_channel_from,
             is_partial,
         })
+    }
+}
+
+#[inline]
+fn image_pixel_count(width: u32, height: u32) -> u64 {
+    width as u64 * height as u64
+}
+
+#[inline]
+fn spline_area_limits(width: u32, height: u32) -> (u64, u64) {
+    let image_size = image_pixel_count(width, height);
+    let level5 = image_size.saturating_mul(8).saturating_add(1u64 << 25);
+    let level10 = image_size.saturating_mul(1024).saturating_add(1u64 << 32);
+    ((1u64 << 30).min(level5), (1u64 << 42).min(level10))
+}
+
+#[inline]
+fn validate_spline_area(estimated_area: u64, limit: u64) -> Result<()> {
+    if estimated_area > limit {
+        Err(jxl_bitstream::Error::ProfileConformance("too large estimated area for splines").into())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod spline_limits_tests {
+    use super::{image_pixel_count, spline_area_limits, validate_spline_area};
+
+    #[test]
+    fn spline_limits_preserve_caps_and_pixel_scaling() {
+        assert_eq!(image_pixel_count(0, 0), 0);
+        assert_eq!(image_pixel_count(65_536, 65_536), 1u64 << 32);
+        assert_eq!(image_pixel_count(1u32 << 20, 1), 1u64 << 20);
+        assert_eq!(
+            image_pixel_count(u32::MAX, u32::MAX),
+            (u32::MAX as u64).pow(2)
+        );
+        assert_eq!(spline_area_limits(0, 0), (1 << 25, 1 << 32));
+        assert_eq!(
+            spline_area_limits(1 << 20, 1),
+            ((1 << 25) + (1 << 23), (1 << 32) + (1 << 30))
+        );
+        assert_eq!(spline_area_limits(65_536, 65_536), (1 << 30, 1 << 42));
+        assert_eq!(spline_area_limits(1 << 20, 1 << 20), (1 << 30, 1 << 42));
+        assert_eq!(spline_area_limits(u32::MAX, u32::MAX), (1 << 30, 1 << 42));
+        let limit = spline_area_limits(1 << 20, 1).1;
+        assert!(validate_spline_area(limit, limit).is_ok());
+        assert!(matches!(
+            validate_spline_area(limit + 1, limit),
+            Err(crate::Error::Bitstream(
+                jxl_bitstream::Error::ProfileConformance("too large estimated area for splines")
+            ))
+        ));
+
+        let mut extreme = crate::data::QuantSpline::default();
+        extreme.manhattan_distance = u64::MAX;
+        extreme.sigma_dct = [i32::MAX; 32];
+        extreme.xyb_dct[1] = [i32::MAX; 32];
+        let splines = crate::data::Splines {
+            quant_splines: alloc::vec![extreme],
+            quant_adjust: 0,
+        };
+        let saturated_estimate = splines.estimate_area(None);
+        assert_eq!(saturated_estimate, u64::MAX);
+        assert!(matches!(
+            validate_spline_area(saturated_estimate, limit),
+            Err(crate::Error::Bitstream(
+                jxl_bitstream::Error::ProfileConformance("too large estimated area for splines")
+            ))
+        ));
     }
 }

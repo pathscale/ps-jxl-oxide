@@ -2,6 +2,7 @@ use crate::Result;
 use alloc::vec;
 use alloc::vec::Vec;
 use jxl_bitstream::{Bitstream, U};
+use jxl_coding::{Decoder, DecoderSetup, PermutationReader};
 use jxl_oxide_common::Bundle;
 
 /// Table of contents of a frame.
@@ -181,6 +182,29 @@ impl Bundle<&crate::FrameHeader> for Toc {
     type Error = crate::Error;
 
     fn parse(bitstream: &mut Bitstream, ctx: &crate::FrameHeader) -> Result<Self> {
+        TocParser::new(ctx)?.parse(bitstream, ctx)
+    }
+}
+
+#[derive(Debug)]
+enum TocStage {
+    Start,
+    PermutationSetup(DecoderSetup),
+    Permutation(Decoder, PermutationReader),
+    AlignSizes,
+    Sizes,
+}
+
+#[derive(Debug)]
+pub(crate) struct TocParser {
+    entry_count: u32,
+    stage: TocStage,
+    permutation: Vec<usize>,
+    sizes: Vec<u32>,
+}
+
+impl Toc {
+    fn entry_count(ctx: &crate::FrameHeader) -> Result<u32> {
         let num_groups = ctx.num_groups();
         let num_passes = ctx.passes.num_passes;
 
@@ -200,26 +224,81 @@ impl Bundle<&crate::FrameHeader> for Toc {
             return Err(jxl_bitstream::Error::ValidationFailed("Too many TOC entries").into());
         }
 
-        let permutated_toc = bitstream.read_bool()?;
-        let permutation = if permutated_toc {
-            let mut decoder = jxl_coding::Decoder::parse(bitstream, 8)?;
-            decoder.begin(bitstream)?;
-            let permutation =
-                jxl_coding::read_permutation(bitstream, &mut decoder, entry_count, 0)?;
+        Ok(entry_count)
+    }
+
+    fn read_size(bitstream: &mut Bitstream) -> Result<u32> {
+        Ok(bitstream.read_u32(U(10), 1024 + U(14), 17408 + U(22), 4211712 + U(30))?)
+    }
+}
+
+impl TocParser {
+    pub(crate) fn new(ctx: &crate::FrameHeader) -> Result<Self> {
+        Ok(Self {
+            entry_count: Toc::entry_count(ctx)?,
+            stage: TocStage::Start,
+            permutation: Vec::new(),
+            sizes: Vec::new(),
+        })
+    }
+
+    // On EOF the bitstream remains at the first unfinished operation.
+    pub(crate) fn parse(
+        &mut self,
+        bitstream: &mut Bitstream,
+        ctx: &crate::FrameHeader,
+    ) -> Result<Toc> {
+        if matches!(self.stage, TocStage::Start) {
+            self.stage = if bitstream.read_bool()? {
+                TocStage::PermutationSetup(DecoderSetup::new(8))
+            } else {
+                TocStage::AlignSizes
+            };
+        }
+        if let TocStage::PermutationSetup(setup) = &mut self.stage {
+            let decoder = setup.read(bitstream)?;
+            self.stage = TocStage::Permutation(decoder, PermutationReader::new(self.entry_count, 0));
+        }
+        if let TocStage::Permutation(decoder, reader) = &mut self.stage {
+            self.permutation = reader.read(bitstream, decoder)?;
             decoder.finalize()?;
-            permutation
-        } else {
-            Vec::new()
-        };
-
+            self.stage = TocStage::AlignSizes;
+        }
+        if matches!(self.stage, TocStage::AlignSizes) {
+            bitstream.zero_pad_to_byte()?;
+            self.stage = TocStage::Sizes;
+        }
+        while self.sizes.len() < self.entry_count as usize {
+            let mut input = bitstream.clone();
+            let size = Toc::read_size(&mut input)?;
+            self.sizes.try_reserve(1)?;
+            self.sizes.push(size);
+            *bitstream = input;
+        }
         bitstream.zero_pad_to_byte()?;
-        let sizes = (0..entry_count)
-            .map(|_| bitstream.read_u32(U(10), 1024 + U(14), 17408 + U(22), 4211712 + U(30)))
-            .collect::<core::result::Result<Vec<_>, _>>()?;
-        bitstream.zero_pad_to_byte()?;
 
+        Toc::finish(
+            bitstream.num_read_bits() / 8,
+            ctx,
+            self.entry_count,
+            core::mem::take(&mut self.sizes),
+            core::mem::take(&mut self.permutation),
+        )
+    }
+}
+
+impl Toc {
+    fn finish(
+        data_start: usize,
+        ctx: &crate::FrameHeader,
+        entry_count: u32,
+        sizes: Vec<u32>,
+        permutation: Vec<usize>,
+    ) -> Result<Self> {
+        let num_groups = ctx.num_groups();
+        let num_passes = ctx.passes.num_passes;
         let mut offsets = Vec::with_capacity(sizes.len());
-        let mut acc = bitstream.num_read_bits() / 8;
+        let mut acc = data_start;
         let mut total_size = 0usize;
         for &size in &sizes {
             offsets.push(acc);
@@ -259,7 +338,7 @@ impl Bundle<&crate::FrameHeader> for Toc {
             out
         };
 
-        let (offsets, sizes, bitstream_to_original, original_to_bitstream) = if permutated_toc {
+        let (offsets, sizes, bitstream_to_original, original_to_bitstream) = if !permutation.is_empty() {
             if permutation.len() != sizes.len() {
                 return Err(crate::Error::InvalidTocPermutation);
             }
@@ -300,5 +379,52 @@ impl Bundle<&crate::FrameHeader> for Toc {
             original_to_bitstream,
             total_size,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jxl_image::ImageHeader;
+
+    #[test]
+    fn permuted_toc_resumes_at_split_ans_seed() {
+        let mut image_bits = Bitstream::new(&[0xff, 0x0a, 0xf8, 0x9f, 0x01]);
+        let image = ImageHeader::parse(&mut image_bits, ()).unwrap();
+        let header = crate::FrameHeader::parse(&mut Bitstream::new(&[1]), &image).unwrap();
+        // One ANS cluster emits symbol 1 for both the permutation length and
+        // its first Lehmer digit, swapping the first two of seven groups.
+        // The seed starts at bit 17. The first bitstream group has size 1.
+        let mut bytes = [0u8; 18];
+        bytes[..8].copy_from_slice(&[0x05, 0x2d, 0, 0, 0x26, 0, 0, 4]);
+
+        let mut whole_bits = Bitstream::new(&bytes);
+        let whole = Toc::parse(&mut whole_bits, &header).unwrap();
+        assert_eq!(whole.group_index_bitstream_order(TocGroupKind::LfGlobal), 1);
+        assert_eq!(whole.bookmark(), bytes.len());
+        assert_eq!(whole.total_byte_size(), 1);
+
+        let mut parser = TocParser::new(&header).unwrap();
+        let mut next_bit = 0;
+        for len in 3..7 {
+            let mut short = Bitstream::new(&bytes[..len]);
+            short.skip_bits(next_bit).unwrap();
+            let error = parser.parse(&mut short, &header).unwrap_err();
+            assert!(error.unexpected_eof(), "{error:?}");
+            next_bit = short.num_read_bits();
+            assert_eq!(next_bit, 17);
+        }
+
+        let mut resumed_bits = Bitstream::new(&bytes);
+        resumed_bits.skip_bits(next_bit).unwrap();
+        let resumed = parser.parse(&mut resumed_bits, &header).unwrap();
+        assert_eq!(resumed_bits.num_read_bits(), whole_bits.num_read_bits());
+        let group_fields = |group: TocGroup| (group.kind, group.offset, group.size);
+        assert!(
+            resumed
+                .iter_bitstream_order()
+                .map(group_fields)
+                .eq(whole.iter_bitstream_order().map(group_fields))
+        );
     }
 }

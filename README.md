@@ -13,7 +13,7 @@ What differs from upstream:
   coordinator spawns through a `TaskExecutor`; `Tasks::inline()` runs them in place, and the `nagoya` feature runs
   them on a host's [nagoya](https://github.com/pathscale/nagoya) executor. Output is bit-identical either way.
 - Zero-copy input: the decoder reads `Arc<[u8]>` spans, whole (`read_bytes`) or streamed in chunks (`feed`).
-- `no_std + alloc` without the default `std` feature; float functions core lacks come from `libm` there.
+- `no_std + alloc` without the default `std` feature; float functions core lacks come from a pure-Rust fallback there, or from `libm` when the `libm` feature is enabled.
 - Removed: JPEG bitstream reconstruction, filesystem convenience APIs, the `image` integration, and the lcms2 and
   moxcms adapters (colour management plugs in through the `ColorManagementSystem` trait).
 

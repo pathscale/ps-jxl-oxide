@@ -6,6 +6,14 @@ use crate::{Error, Result};
 
 /// Reads the encoded ICC profile stream from the given bitstream.
 pub fn read_icc(bitstream: &mut Bitstream) -> Result<Vec<u8>> {
+    read_icc_with_alloc_tracker(bitstream, None).map(|(encoded_icc, _reservation)| encoded_icc)
+}
+
+/// Reads the encoded ICC profile stream while accounting for its buffer allocation.
+pub fn read_icc_with_alloc_tracker(
+    bitstream: &mut Bitstream,
+    tracker: Option<&jxl_grid::AllocTracker>,
+) -> Result<(Vec<u8>, Option<jxl_grid::AllocHandle>)> {
     let enc_size = bitstream.read_u64()?;
     tracing::trace!(enc_size);
 
@@ -16,6 +24,11 @@ pub fn read_icc(bitstream: &mut Bitstream) -> Result<Vec<u8>> {
             jxl_bitstream::Error::ProfileConformance("Too large encoded ICC profile").into(),
         );
     }
+
+    let enc_size = enc_size as usize;
+    let reservation = tracker
+        .map(|tracker| tracker.alloc::<u8>(enc_size))
+        .transpose()?;
 
     let mut decoder = jxl_coding::Decoder::parse(bitstream, 41)?;
 
@@ -47,7 +60,7 @@ pub fn read_icc(bitstream: &mut Bitstream) -> Result<Vec<u8>> {
         "Quick ICC validity check",
     );
 
-    if stream_offset + commands_size > enc_size {
+    if stream_offset + commands_size > enc_size as u64 {
         return Err(Error::InvalidIccStream("invalid commands_size"));
     }
 
@@ -55,14 +68,18 @@ pub fn read_icc(bitstream: &mut Bitstream) -> Result<Vec<u8>> {
         return Err(jxl_bitstream::Error::ProfileConformance("ICC output_size too large").into());
     }
 
-    if output_size + 65536 < enc_size {
+    if output_size + 65536 < enc_size as u64 {
         return Err(Error::InvalidIccStream(
             "reported output_size is far smaller than enc_size",
         ));
     }
 
     // Read remaining data
-    encoded_icc.resize(enc_size as usize, 0);
+    let additional = enc_size - encoded_icc.len();
+    encoded_icc
+        .try_reserve_exact(additional)
+        .map_err(|_| jxl_grid::OutOfMemory::new(enc_size))?;
+    encoded_icc.resize(enc_size, 0);
     for (idx, b) in encoded_icc.iter_mut().enumerate().skip(max_size_header_len) {
         let sym = decoder.read_varint(bitstream, get_icc_ctx(idx, b1, b2))?;
         if sym >= 256 {
@@ -75,7 +92,7 @@ pub fn read_icc(bitstream: &mut Bitstream) -> Result<Vec<u8>> {
     }
 
     decoder.finalize()?;
-    Ok(encoded_icc)
+    Ok((encoded_icc, reservation))
 }
 
 fn get_icc_ctx(idx: usize, b1: u8, b2: u8) -> u32 {
